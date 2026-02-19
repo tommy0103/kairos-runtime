@@ -56,7 +56,7 @@ export function createMessageGateway(
       }
       await options.telegram.endStream(message.chatId);
     } catch (error) {
-      options.telegram.appendStream(message.chatId, "\n(生成失败，请稍后重试)");
+      options.telegram.appendStream(message.chatId, "\n(小猫可能把家拆了，等会儿再试试吧…)");
       await options.telegram.endStream(message.chatId);
       console.error("message gateway stream failed:", error);
     }
