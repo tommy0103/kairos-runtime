@@ -1,4 +1,12 @@
-import { createInMemoryAgentRuntime, createOpenAIAgent } from "./agent";
+import {
+  createFetchWebpageTool,
+  createInMemoryAgentRuntime,
+  createListFilesSafeTool,
+  createOpenAIAgent,
+  createReadFileSafeTool,
+  createRunSafeBashTool,
+  createWriteFileSafeTool,
+} from "./agent";
 import {
   createMentionMeTriggerPolicy,
   createMessageGateway,
@@ -7,17 +15,28 @@ import {
 import { createTelegramAdapter } from "./telegram/adapter";
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const API_KEY = process.env.DEEPSEEK_API_KEY;
+const API_KEY = process.env.API_KEY ?? process.env.ARK_API_KEY;
 
 if (!BOT_TOKEN) {
   throw new Error("BOT_TOKEN is required to start telegram bot.");
 }
 if (!API_KEY) {
-  throw new Error("API_KEY is required to start AI orchestrator.");
+  throw new Error("API_KEY (or DEEPSEEK_API_KEY) is required to start AI orchestrator.");
 }
 
 const telegram = createTelegramAdapter(BOT_TOKEN);
-const agent = createOpenAIAgent({ model: "deepseek-chat", baseURL: "https://api.deepseek.com/v1", apiKey: API_KEY });
+const agent = createOpenAIAgent({
+  model: "doubao-seed-1-8-251228",
+  baseURL: "https://ark.cn-beijing.volces.com/api/v3",
+  apiKey: API_KEY,
+  tools: [
+    createFetchWebpageTool(),
+    createRunSafeBashTool(),
+    createReadFileSafeTool(),
+    createWriteFileSafeTool(),
+    createListFilesSafeTool(),
+  ],
+});
 const runtime = createInMemoryAgentRuntime({ agent });
 const gateway = createMessageGateway({
   telegram,
