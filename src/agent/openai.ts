@@ -4,6 +4,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createEvoluteTool } from "./tools/evolute";
 
 export interface LLMMessage {
   role: "system" | "user" | "assistant";
@@ -125,20 +126,6 @@ function createTextStreamQueue() {
   };
 }
 
-function createMutex() {
-  let tail = Promise.resolve();
-  return async () => {
-    let releaseLock = () => {};
-    const lock = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-    const previous = tail;
-    tail = tail.then(() => lock);
-    await previous;
-    return () => releaseLock();
-  };
-}
-
 function schemaTypeToText(schema: any): string {
   if (!schema || typeof schema !== "object") {
     return "unknown";
@@ -218,31 +205,34 @@ export function createOpenAIAgent(
   const defaultModel = options.model ?? DEFAULT_MODEL;
   const baseURL = options.baseURL ?? DEFAULT_BASE_URL;
   const initialTools = options.tools ?? [];
-  const toolRegistry = new Map<string, AgentTool<any>>(
+  const staticToolRegistry = new Map<string, AgentTool<any>>(
     initialTools.map((tool) => [tool.name, tool])
   );
+  const dynamicToolRegistry = new Map<string, AgentTool<any>>();
+  const activeAgents = new Set<Agent>();
+  const evoluteTool = createEvoluteTool(async (tool) => {
+    await registerTool(tool);
+  });
+  staticToolRegistry.set(evoluteTool.name, evoluteTool);
+  const getCurrentTools = () => {
+    const merged = new Map<string, AgentTool<any>>(staticToolRegistry);
+    for (const [name, tool] of dynamicToolRegistry) {
+      merged.set(name, tool);
+    }
+    return Array.from(merged.values());
+  };
+  const applyToolsToActiveAgents = () => {
+    const tools = getCurrentTools();
+    for (const activeAgent of activeAgents) {
+      activeAgent.setTools(tools);
+    }
+  };
   const syncToolsMemoryFile = () => {
-    const tools = Array.from(toolRegistry.values());
+    const tools = getCurrentTools();
     const content = renderToolsMemory(tools);
     writeFileSync(TOOLS_MEMORY_FILE, content, "utf8");
   };
   syncToolsMemoryFile();
-  let temperatureForCurrentRequest: number | undefined;
-  const acquire = createMutex();
-  const agent = new Agent({
-    initialState: {
-      model: createCompatibleModel(defaultModel, baseURL),
-      tools: Array.from(toolRegistry.values()),
-      systemPrompt: "",
-      messages: [],
-    },
-    streamFn: (streamModel, context, streamOptions) =>
-      streamSimple(streamModel, context, {
-        ...(streamOptions as ProviderStreamOptions),
-        apiKey,
-        temperature: temperatureForCurrentRequest,
-      }),
-  });
 
   const generateText: OpenAIAgent["generateText"] = async (
     messages,
@@ -259,33 +249,52 @@ export function createOpenAIAgent(
     messages,
     generateOptions = {}
   ) {
-    const releaseLock = await acquire();
-    const queue = createTextStreamQueue();
     const model = createCompatibleModel(generateOptions.model ?? defaultModel, baseURL);
     const prompt = extractLatestUserPrompt(messages);
     const systemPrompt = extractSystemPrompt(messages);
+    if (!prompt.trim()) {
+      return;
+    }
+
+    const queue = createTextStreamQueue();
     let promptFinished = false;
     let unsubscribe = () => {};
     let promptPromise: Promise<void> | null = null;
+    let hasEmittedText = false;
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: getCurrentTools(),
+        systemPrompt,
+        messages: [],
+      },
+      streamFn: (streamModel, context, streamOptions) =>
+        streamSimple(streamModel, context, {
+          ...(streamOptions as ProviderStreamOptions),
+          apiKey,
+          temperature: generateOptions.temperature,
+        }),
+    });
+    activeAgents.add(agent);
 
     try {
-      if (!prompt.trim()) {
-        return;
-      }
-
-      temperatureForCurrentRequest = generateOptions.temperature;
-      agent.setModel(model);
-      agent.setSystemPrompt(systemPrompt);
-      agent.setTools(Array.from(toolRegistry.values()));
-      agent.clearMessages();
-
       unsubscribe = agent.subscribe((event) => {
         if (event.type !== "message_update") {
           return;
         }
         const assistantEvent = event.assistantMessageEvent;
         if (assistantEvent.type === "text_delta" && assistantEvent.delta) {
+          hasEmittedText = true;
           queue.push(assistantEvent.delta);
+          return;
+        }
+        if (
+          assistantEvent.type === "text_end" &&
+          !hasEmittedText &&
+          assistantEvent.content
+        ) {
+          hasEmittedText = true;
+          queue.push(assistantEvent.content);
         }
       });
 
@@ -310,54 +319,40 @@ export function createOpenAIAgent(
         await promptPromise.catch(() => undefined);
       }
       unsubscribe();
-      temperatureForCurrentRequest = undefined;
-      releaseLock();
+      activeAgents.delete(agent);
       agent.clearMessages();
       agent.clearAllQueues();
     }
   };
 
   const registerTool: OpenAIAgent["registerTool"] = async (tool) => {
-    const releaseLock = await acquire();
-    try {
-      toolRegistry.set(tool.name, tool);
-      agent.setTools(Array.from(toolRegistry.values()));
-      syncToolsMemoryFile();
-    } finally {
-      releaseLock();
-    }
+    dynamicToolRegistry.set(tool.name, tool);
+    applyToolsToActiveAgents();
+    syncToolsMemoryFile();
   };
 
   const unregisterTool: OpenAIAgent["unregisterTool"] = async (name) => {
-    const releaseLock = await acquire();
-    try {
-      const deleted = toolRegistry.delete(name);
-      if (deleted) {
-        agent.setTools(Array.from(toolRegistry.values()));
-        syncToolsMemoryFile();
-      }
-      return deleted;
-    } finally {
-      releaseLock();
+    const deletedDynamic = dynamicToolRegistry.delete(name);
+    const deletedStatic = staticToolRegistry.delete(name);
+    const deleted = deletedDynamic || deletedStatic;
+    if (deleted) {
+      applyToolsToActiveAgents();
+      syncToolsMemoryFile();
     }
+    return deleted;
   };
 
   const replaceTools: OpenAIAgent["replaceTools"] = async (tools) => {
-    const releaseLock = await acquire();
-    try {
-      toolRegistry.clear();
-      for (const tool of tools) {
-        toolRegistry.set(tool.name, tool);
-      }
-      agent.setTools(Array.from(toolRegistry.values()));
-      syncToolsMemoryFile();
-    } finally {
-      releaseLock();
+    staticToolRegistry.clear();
+    for (const tool of tools) {
+      staticToolRegistry.set(tool.name, tool);
     }
+    applyToolsToActiveAgents();
+    syncToolsMemoryFile();
   };
 
   const listTools: OpenAIAgent["listTools"] = () =>
-    Array.from(toolRegistry.keys());
+    getCurrentTools().map((tool) => tool.name);
 
   return {
     generateText,

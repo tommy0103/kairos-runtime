@@ -64,7 +64,7 @@ export function createRunSafeBashTool(): AgentTool<any, RunSafeBashDetails> {
     name: "run_safe_bash",
     label: "Run safe bash command",
     description:
-      "Run a read-oriented bash command in ~/memoh-lite/src/agent/tools with safety checks.",
+      `Run a read-oriented bash command in ${SAFE_TOOLS_ROOT} with safety checks.`,
     parameters: Type.Object({
       command: Type.String({
         description: "Bash command to execute. Dangerous commands are blocked.",

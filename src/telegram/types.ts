@@ -23,6 +23,7 @@ export interface TelegramMessage {
 }
 
 export interface StreamState {
+  chatId: number;
   placeholderMessageId: number;
   chunks: string[];
 }
@@ -39,7 +40,7 @@ export interface TelegramAdapter {
     chatId: number,
     messageId?: number,
     placeholder?: string
-  ) => Promise<void>;
-  appendStream: (chatId: number, chunk: string) => void;
-  endStream: (chatId: number) => Promise<string>;
+  ) => Promise<number>;
+  appendStream: (streamMessageId: number, chunk: string) => void;
+  endStream: (streamMessageId: number) => Promise<string>;
 }

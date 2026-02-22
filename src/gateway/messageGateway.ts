@@ -28,7 +28,14 @@ export function createMessageGateway(
     (a, b) => a.priority - b.priority
   );
 
-  const unsubscribe = options.telegram.onMessage(async (message) => {
+  const unsubscribe = options.telegram.onMessage((message) => {
+    void handleMessage(message).catch((error) => {
+      console.error("message gateway handler failed:", error);
+    });
+  });
+
+  const handleMessage = async (message: TelegramMessage) => {
+    console.log("handleMessage", message);
     options.runtime.observe(message);
     if (message.metadata.isBot) {
       return;
@@ -39,7 +46,7 @@ export function createMessageGateway(
       return;
     }
 
-    await options.telegram.startStream(
+    const streamMessageId = await options.telegram.startStream(
       message.chatId,
       message.messageId
     );
@@ -49,15 +56,16 @@ export function createMessageGateway(
         triggerMessage: message,
         prompt: decision.prompt,
       })) {
-        options.telegram.appendStream(message.chatId, chunk);
+        console.log("append stream", chunk);
+        options.telegram.appendStream(streamMessageId, chunk);
       }
-      await options.telegram.endStream(message.chatId);
+      await options.telegram.endStream(streamMessageId);
     } catch (error) {
-      options.telegram.appendStream(message.chatId, "\n(生成失败，请稍后重试)");
-      await options.telegram.endStream(message.chatId);
+      options.telegram.appendStream(streamMessageId, "\n(生成失败，请稍后重试)");
+      await options.telegram.endStream(streamMessageId);
       console.error("message gateway stream failed:", error);
     }
-  });
+  };
 
   return {
     stop: () => unsubscribe(),

@@ -13,6 +13,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   const bot = new Bot(token);
   const messages: TelegramMessage[] = [];
   const streams = new Map<number, StreamState>();
+  let nextStreamId = 1;
   const messageHandlers = new Set<
     (message: TelegramMessage) => void | Promise<void>
   >();
@@ -40,33 +41,36 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     placeholder = DEFAULT_PLACEHOLDER,
   ) => {
     const sent = await sendMessage(chatId, placeholder, messageId);
-    streams.set(chatId, {
+    const streamId = nextStreamId++;
+    streams.set(streamId, {
+      chatId,
       placeholderMessageId: sent.message_id,
       chunks: [],
     });
+    return streamId;
   };
 
-  const appendStream: TelegramAdapter["appendStream"] = (chatId, chunk) => {
-    const state = streams.get(chatId);
+  const appendStream: TelegramAdapter["appendStream"] = (streamId, chunk) => {
+    const state = streams.get(streamId);
     if (!state) {
-      throw new Error(`stream not started for chatId: ${chatId}`);
+      throw new Error(`stream not started for streamId: ${streamId}`);
     }
     state.chunks.push(chunk);
   };
 
-  const endStream: TelegramAdapter["endStream"] = async (chatId) => {
-    const state = streams.get(chatId);
+  const endStream: TelegramAdapter["endStream"] = async (streamId) => {
+    const state = streams.get(streamId);
     if (!state) {
-      throw new Error(`stream not started for chatId: ${chatId}`);
+      throw new Error(`stream not started for streamId: ${streamId}`);
     }
 
     const finalText = state.chunks.join("") || DEFAULT_FINAL_TEXT;
     await bot.api.editMessageText(
-      chatId,
+      state.chatId,
       state.placeholderMessageId,
       finalText
     );
-    streams.delete(chatId);
+    streams.delete(streamId);
     return finalText;
   };
 
@@ -78,6 +82,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   };
 
   bot.on("message", async (ctx, next) => {
+    // console.log("message arrived", ctx.msg.text);
     const message = toTelegramMessage(ctx);
     if (!message) {
       return;
@@ -85,11 +90,9 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
 
     messages.push(message);
     for (const handler of messageHandlers) {
-      try {
-        await handler(message);
-      } catch (error) {
+      void Promise.resolve(handler(message)).catch((error) => {
         console.error("telegram onMessage handler failed:", error);
-      }
+      });
     }
 
     await next();
