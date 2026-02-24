@@ -69,8 +69,21 @@ export function createMessageGateway(
       }
       await options.telegram.endStream(streamMessageId);
     } catch (error) {
-      options.telegram.appendStream(streamMessageId, "\n(生成失败，请稍后重试)");
-      await options.telegram.endStream(streamMessageId);
+      try {
+        options.telegram.appendStream(streamMessageId, "\n(生成失败，请稍后重试)");
+      } catch {
+        // Stream may already be closed; ignore append failure.
+      }
+      try {
+        await options.telegram.endStream(streamMessageId);
+      } catch (endError) {
+        console.error("message gateway endStream failed:", endError);
+        await options.telegram.reply(
+          message.chatId,
+          "生成失败，请稍后重试。",
+          message.messageId
+        );
+      }
       console.error("message gateway stream failed:", error);
     }
   };

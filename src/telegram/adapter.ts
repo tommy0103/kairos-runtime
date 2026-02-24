@@ -8,6 +8,8 @@ import type {
 
 const DEFAULT_PLACEHOLDER = "小猫正在玩毛线球...";
 const DEFAULT_FINAL_TEXT = "(空内容)";
+const EDIT_RETRY_ATTEMPTS = 3;
+const EDIT_RETRY_DELAY_MS = 500;
 
 export function createTelegramAdapter(token: string): TelegramAdapter {
   const bot = new Bot(token);
@@ -65,13 +67,21 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     }
 
     const finalText = state.chunks.join("") || DEFAULT_FINAL_TEXT;
-    await bot.api.editMessageText(
-      state.chatId,
-      state.placeholderMessageId,
-      finalText
-    );
-    streams.delete(streamId);
-    return finalText;
+    try {
+      await retry(
+        () =>
+          bot.api.editMessageText(
+            state.chatId,
+            state.placeholderMessageId,
+            finalText
+          ),
+        EDIT_RETRY_ATTEMPTS,
+        EDIT_RETRY_DELAY_MS
+      );
+      return finalText;
+    } finally {
+      streams.delete(streamId);
+    }
   };
 
   const onMessage: TelegramAdapter["onMessage"] = (handler) => {
@@ -194,4 +204,51 @@ function extractMentions(message: NonNullable<Context["message"]>): string[] {
     }
   }
   return mentions;
+}
+
+async function retry<T>(
+  action: () => Promise<T>,
+  attempts: number,
+  delayMs: number
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await action();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableNetworkError(error)) {
+        throw error;
+      }
+      if (attempt === attempts) {
+        break;
+      }
+      await sleep(delayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const maybeError = error as { code?: unknown; message?: unknown };
+  const code = typeof maybeError.code === "string" ? maybeError.code : "";
+  const message = typeof maybeError.message === "string" ? maybeError.message : "";
+  const retryableCodes = new Set(["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EHOSTUNREACH"]);
+  if (retryableCodes.has(code)) {
+    return true;
+  }
+  const lowerMessage = message.toLowerCase();
+  return (
+    lowerMessage.includes("socket connection was closed unexpectedly") ||
+    lowerMessage.includes("network request") ||
+    lowerMessage.includes("fetch failed") ||
+    lowerMessage.includes("network error")
+  );
 }

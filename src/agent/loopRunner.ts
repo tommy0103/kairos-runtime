@@ -260,6 +260,10 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
             const latestTools = options.getCurrentTools();
             syncToolsInPlace(loopContext, latestTools);
           }
+
+          if(event.type === "tool_execution_start") {
+            console.log("[Event: tool_execution_start] Tool: ", event.toolName);
+          }
         }
 
         if (!globalMessageHasEmitted) {

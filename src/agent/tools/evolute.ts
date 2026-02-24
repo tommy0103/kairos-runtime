@@ -13,7 +13,7 @@ interface EvoluteDetails {
 }
 
 const EVOLUTE_MODULE_DIR = resolve(process.cwd(), ".evolute-modules");
-const TOOL_CODE_DIR = resolve(process.cwd(), "agent/tools");
+const TOOL_CODE_DIR = resolve(process.cwd(), "agent/tools/evolutions");
 const KEEP_EVOLUTE_MODULES = process.env.EVOLUTE_KEEP_MODULES === "1";
 const EVOLUTE_MANAGED_DEPS_FILE = join(EVOLUTE_MODULE_DIR, "package.json");
 const BUILTIN_PLAIN_NAMES = new Set(builtinModules.map((name) => name.replace(/^node:/, "")));
@@ -68,7 +68,7 @@ async function compileToolFromCode(code: string): Promise<AgentTool<any>> {
   console.log("source", source);
   const moduleSource = buildModuleSource(source);
   // const moduleSource = rewriteDefaultImports(buildModuleSource(source));
-  console.log("moduleSource", moduleSource);
+  // console.log("moduleSource", moduleSource);
   await mkdir(EVOLUTE_MODULE_DIR, { recursive: true });
   const detectedDeps = await detectExternalDependencies(source);
   console.log("detectedDeps", detectedDeps);
@@ -77,7 +77,7 @@ async function compileToolFromCode(code: string): Promise<AgentTool<any>> {
     EVOLUTE_MODULE_DIR,
     `tool-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`
   );
-  console.log("modulePath", modulePath);
+  // console.log("modulePath", modulePath);
 
   await writeFile(modulePath, moduleSource, "utf8");
   let tool: unknown;
@@ -123,7 +123,7 @@ async function compileToolFromCode(code: string): Promise<AgentTool<any>> {
     validatedTool = validateDynamicTool(tool);
     // console.log("code", code);
     // console.log("validatedTool", validatedTool);
-    // await mkdir(TOOL_CODE_DIR, { recursive: true });
+    await mkdir(TOOL_CODE_DIR, { recursive: true });
     const codeUrl = `${TOOL_CODE_DIR}/${validatedTool.name}.ts`;
     await writeFile(codeUrl, code, "utf8");
     await writeDependencySnapshot(validatedTool.name, detectedDeps);
@@ -370,7 +370,7 @@ export function createEvoluteTool(
     }),
     execute: async (_toolCallId, params) => {
       const dynamicTool = await compileToolFromCode(params.code);
-      console.log("dynamicTool", params.code, dynamicTool);
+      console.log("dynamicTool", dynamicTool);
       await registerTool(dynamicTool);
       return {
         content: [

@@ -8,6 +8,7 @@
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.54.0",
     "@mariozechner/pi-ai": "^0.54.0",
+    "asciichart": "^1.5.25",
     "cheerio": "^1.2.0",
     "elysia": "latest",
     "es-module-lexer": "^2.0.0",

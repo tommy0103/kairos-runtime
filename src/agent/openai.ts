@@ -1,4 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadDynamicToolsFromDirectory } from "./dynamicToolsLoader";
 import { createAgentLoopRunner } from "./loopRunner";
 import { createEvoluteTool } from "./tools/evolute";
 import { createToolsRegistry } from "./toolsRegistry";
@@ -35,6 +38,8 @@ export interface OpenAIAgent {
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_BASE_URL = "https://api.deepseek.com/v1";
+const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
+const EVOLUTIONS_DIR = resolve(CURRENT_DIR, "tools/evolutions");
 
 export function createOpenAIAgent(
   options: CreateOpenAIAgentOptions = {}
@@ -63,6 +68,22 @@ export function createOpenAIAgent(
     getCurrentTools: () => toolsRegistry.getCurrentTools(),
   });
   toolsDocWriter.sync(toolsRegistry.getCurrentTools());
+  void (async () => {
+    const loaded = await loadDynamicToolsFromDirectory(EVOLUTIONS_DIR);
+    for (const tool of loaded.tools) {
+      toolsRegistry.registerDynamicTool(tool);
+    }
+    if (loaded.tools.length > 0) {
+      loopRunner.applyToolsToActiveLoops();
+      toolsDocWriter.sync(toolsRegistry.getCurrentTools());
+      console.log(
+        `[dynamic-tools] loaded from evolutions: ${loaded.tools.map((tool) => tool.name).join(", ")}`
+      );
+    }
+    for (const item of loaded.errors) {
+      console.error(`[dynamic-tools] failed loading ${item.filePath}:`, item.error);
+    }
+  })();
 
   const generateText: OpenAIAgent["generateText"] = async (
     messages,

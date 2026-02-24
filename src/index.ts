@@ -113,7 +113,7 @@ global.fetch = async (...args) => {
 // let agentRef: OpenAIAgent | null = null;
 
 const toolFactories: Record<string, () => any> = {
-  // fetch_webpage: createFetchWebpageTool,
+  fetch_webpage: createFetchWebpageTool,
   // run_safe_bash: createRunSafeBashTool,
   // read_file_safe: createReadFileSafeTool,
   // write_file_safe: createWriteFileSafeTool,
