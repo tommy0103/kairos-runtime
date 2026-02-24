@@ -262,7 +262,9 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
           }
 
           if(event.type === "tool_execution_start") {
-            console.log("[Event: tool_execution_start] Tool: ", event.toolName);
+            console.log("[Event: tool_execution_start] Tool:", event.toolName, 
+              "Params:", event.args,
+              "ToolCallId:", event.toolCallId);
           }
         }
 
