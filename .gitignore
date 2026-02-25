@@ -46,5 +46,5 @@ src/agent/memory_files
 
 # dev docs
 .dev.docs
-src/.evolute-modules
+.evolute-modules
 src/agent/tools/evolutions
