@@ -6,6 +6,7 @@ import type {
   TriggerDecision,
 } from "./types";
 import type { UserRolesStore } from "../storage";
+import { handleCommand } from "./commandHandler";
 
 const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
@@ -41,6 +42,17 @@ export function createMessageGateway(
   const handleMessage = async (message: TelegramMessage) => {
     console.log("handleMessage", message);
     options.runtime.recordMessage(message);
+
+    // track username→userId mapping
+    if (options.userRoles && message.metadata.username) {
+      options.userRoles.trackUser(message.userId, message.metadata.username);
+    }
+
+    // handle /commands before anything else
+    if (options.userRoles && /\/(?:block|unblock|status|grant|revoke)\b/.test(message.context)) {
+      const handled = await handleCommand(message, options.userRoles, options.telegram);
+      if (handled) return;
+    }
 
     // blocked users get recorded but never trigger agent
     if (options.userRoles?.isBlocked(message.userId)) {
