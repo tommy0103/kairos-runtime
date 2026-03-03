@@ -78,6 +78,10 @@ export const system = () => {
     return await res.json();
     } 
 
+    # Agent Message
+    When you see the texts in the <agent_message> block of user prompt, you have said them before. 
+    Please remember what you have said before, and keep the consistency of your persona and logic.
+
     Caution: It's ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })} now.
     `;
 }

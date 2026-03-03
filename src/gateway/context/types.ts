@@ -30,9 +30,11 @@ export interface ChatControlBlock {
   nextSessionSeq: number;
 }
 
+export type ContextMessagesPair = [recentMessages: TelegramMessage[], sessionMessages: TelegramMessage[]];
+
 export interface ContextStore {
   ingestMessage: (input: { message: TelegramMessage }) => Promise<void>;
-  getContextByAnchor: (input: { chatId: number; messageId: number }) => TelegramMessage[];
+  getContextByAnchor: (input: { chatId: number; messageId: number }) => ContextMessagesPair;
   debugPrintSessionControlBlocks: (input?: {
     chatId?: number;
     includeVectors?: boolean;
@@ -42,9 +44,9 @@ export interface ContextStore {
 
 export interface ContextAssemblerBuildInput {
   triggerMessage: TelegramMessage;
-  prompt: string;
-  systemPrompt: string;
   contextMessages: TelegramMessage[];
+  recentMessages: TelegramMessage[];
+  systemPrompt: string;
 }
 
 export interface ContextAssembler {

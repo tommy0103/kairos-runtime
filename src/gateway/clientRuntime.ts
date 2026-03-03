@@ -65,14 +65,14 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
 
   const streamReply: ClientRuntime["streamReply"] = ({ triggerMessage, prompt }) => {
     const stream = new RemoteAsyncIterable<string>();
-    const contextMessages = contextStore.getContextByAnchor({
+    const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
       chatId: triggerMessage.chatId,
       messageId: triggerMessage.messageId,
     });
     const llmMessages = contextAssembler.build({
-      contextMessages,
+      contextMessages: sessionMessages,
+      recentMessages,
       triggerMessage,
-      prompt,
       systemPrompt: system(),
     });
     // console.log("llmMessages", llmMessages);

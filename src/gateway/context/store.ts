@@ -23,6 +23,7 @@ const GHOST_CONTEXT_WINDOW_MS = 30 * 1000;
 const MEDIUM_MESSAGE_LENGTH = 8;
 const SHORT_MESSAGE_LENGTH = 4;
 const RECENT_SESSIONS_COUNT = 5;
+const RECENT_CHAT_MESSAGES_COUNT = 10;
 
 export function createInMemoryContextStore(
   options: CreateInMemoryContextStoreOptions = {}
@@ -143,25 +144,35 @@ export function createInMemoryContextStore(
     getContextByAnchor: ({ chatId, messageId }) => {
       const ccb = chatControlBlocks.get(chatId);
       if (!ccb) {
-        return [];
+        return [[], []];
       }
       const node = ccb.messageNodes.get(messageId);
       if (!node) {
-        return [];
+        return [[], []];
       }
+
+      const recentMessages = Array.from(ccb.messageNodes.values())
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(-RECENT_CHAT_MESSAGES_COUNT)
+        .map((item) => item.message);
+
       const session = ccb.sessionControlBlocks.get(node.sessionId);
       if (!session) {
-        return [];
+        return [recentMessages, []];
       }
-      const messages = [...session.messageIds]
+
+      const sessionMessages = [...session.messageIds]
         .map((id) => ccb.messageNodes.get(id))
         .filter((item): item is MessageNode => Boolean(item))
         .sort((a, b) => a.timestamp - b.timestamp)
         .map((item) => item.message);
-      if (messages.length <= maxContextMessages) {
-        return messages;
+      if (sessionMessages.length <= maxContextMessages) {
+        return [recentMessages, sessionMessages];
       }
-      return messages.slice(messages.length - maxContextMessages);
+      return [
+        recentMessages,
+        sessionMessages.slice(sessionMessages.length - maxContextMessages),
+      ];
     },
     debugPrintSessionControlBlocks: ({
       chatId,
