@@ -11,12 +11,13 @@ export async function handleCommand(
     userRoles: UserRolesStore,
     telegram: TelegramAdapter
 ): Promise<boolean> {
-    // 采用更健壮的正规则，支持 /cmd, /cmd@bot, @bot /cmd 格式
-    const match = message.context.trim().match(/^(?:\/(\w+)(?:@\S+)?|@\S+\s+\/(\w+))(?:\s+(@\S+))?/i);
+    // 采用更健壮的正规则，支持 /cmd, /cmd@bot, @bot /cmd 格式，并捕获后续参数
+    const match = message.context.trim().match(/^(?:\/(\w+)(?:@\S+)?|@\S+\s+\/(\w+))(?:\s+(.+))?/i);
     if (!match) return false;
 
     const cmd = (match[1] ?? match[2]).toLowerCase();
-    const arg = match[3]?.trim().slice(1) ?? ""; // remove @
+    const rawArg = match[3]?.trim() ?? "";
+    const arg = rawArg.startsWith("@") ? rawArg.slice(1) : rawArg;
 
     const callerRole = userRoles.getRole(message.userId);
     const isAdmin = callerRole === "owner" || callerRole === "admin";
