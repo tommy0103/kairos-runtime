@@ -33,6 +33,15 @@ export function createUserRolesStore(dbPath = "data/memoh.db"): UserRolesStore {
 
     const db = new Database(dbPath, { create: true });
 
+    // Migration: rename 'alias' to 'username' if 'alias' exists
+    const tableInfo = db.query<any, [string]>("PRAGMA table_info(user_roles)").all("user_roles");
+    const hasAlias = tableInfo.some(c => c.name === "alias");
+    const hasUsername = tableInfo.some(c => c.name === "username");
+
+    if (hasAlias && !hasUsername) {
+        db.run("ALTER TABLE user_roles RENAME COLUMN alias TO username");
+    }
+
     db.run(`
     CREATE TABLE IF NOT EXISTS user_roles (
       user_id   TEXT PRIMARY KEY,
@@ -50,7 +59,7 @@ export function createUserRolesStore(dbPath = "data/memoh.db"): UserRolesStore {
   `);
     db.run(`
     CREATE INDEX IF NOT EXISTS idx_known_users_username
-    ON known_users (username)
+    ON known_users (username COLLATE NOCASE)
   `);
 
     const stmtGet = db.query<{ role: string }, [string]>(

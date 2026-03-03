@@ -1,5 +1,5 @@
 import type { TelegramAdapter, TelegramMessage } from "../telegram/types";
-import type { UserRolesStore } from "../storage";
+import type { UserRolesStore, UserRole } from "../storage";
 import { logger } from "../utils/logger";
 
 /**
@@ -11,10 +11,11 @@ export async function handleCommand(
     userRoles: UserRolesStore,
     telegram: TelegramAdapter
 ): Promise<boolean> {
-    const match = message.context.trim().match(/^\/?(@\S+\s+)?\/(\w+)(\s+@\S+)?/i);
+    // Robust regex to handle /cmd, /cmd@bot, and @bot /cmd formats
+    const match = message.context.trim().match(/^(?:\/(\w+)(?:@\S+)?|@\S+\s+\/(\w+))(?:\s+(@\S+))?/i);
     if (!match) return false;
 
-    const cmd = match[2].toLowerCase();
+    const cmd = (match[1] ?? match[2]).toLowerCase();
     const arg = match[3]?.trim().slice(1) ?? ""; // remove @
 
     const callerRole = userRoles.getRole(message.userId);
@@ -39,20 +40,23 @@ export async function handleCommand(
         return true;
     }
 
+    // Role-related commands types for safety
+    const adminCmds = ["block", "unblock", "grant", "revoke", "flush_logs", "view_logs", "status"] as const;
+    const isCommand = (v: string): v is (typeof adminCmds)[number] => (adminCmds as readonly string[]).includes(v);
+
+    if (!isCommand(cmd)) return false;
+
+    // All these commands require admin privileges
+    if (!isAdmin) {
+        await telegram.reply(message.chatId, "管理员权限不足。", message.messageId);
+        return true;
+    }
+
     if (cmd === "status") {
         const roles = userRoles.listAll();
         const text = roles.length === 0 ? "没有角色记录。"
             : roles.map(r => `${r.username ?? r.userId} (${r.userId}) → ${r.role}`).join("\n");
         await telegram.reply(message.chatId, text, message.messageId);
-        return true;
-    }
-
-    // Admin-only commands below
-    const adminCmds = ["block", "unblock", "grant", "revoke", "flush_logs", "view_logs"];
-    if (!adminCmds.includes(cmd)) return false;
-
-    if (!isAdmin) {
-        await telegram.reply(message.chatId, "管理员权限不足。", message.messageId);
         return true;
     }
 
@@ -73,7 +77,7 @@ export async function handleCommand(
             const time = new Date(l.timestamp).toLocaleTimeString();
             return `\`[${time}] ${l.level.padEnd(5)} [${l.module}] ${l.message}\``;
         }).join("\n");
-        await telegram.reply(message.chatId, ` **最近 ${logs.length} 条日志**:\n\n${text}`, message.messageId);
+        await telegram.reply(message.chatId, `📜 **最近 ${logs.length} 条日志**:\n\n${text}`, message.messageId);
         return true;
     }
 
