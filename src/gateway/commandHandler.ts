@@ -1,8 +1,9 @@
 import type { TelegramAdapter, TelegramMessage } from "../telegram/types";
 import type { UserRolesStore } from "../storage";
+import { logger } from "../utils/logger";
 
 /**
- * Handle administrative commands (/block, /unblock, /grant, /revoke, /status).
+ * Handle administrative commands (/status, /block, /unblock, /grant, /revoke, /flush_logs, /view_logs, /help).
  * Returns true if the message was a command and was handled.
  */
 export async function handleCommand(
@@ -16,6 +17,28 @@ export async function handleCommand(
     const cmd = match[2].toLowerCase();
     const arg = match[3]?.trim().slice(1) ?? ""; // remove @
 
+    const callerRole = userRoles.getRole(message.userId);
+    const isAdmin = callerRole === "owner" || callerRole === "admin";
+
+    // Help command (accessible to all, but shows different lists)
+    if (cmd === "help") {
+        let text = " **可用命令**\n\n";
+        text += "`/status` - 查看所有角色状态\n";
+        text += "`/help` - 显示此帮助信息\n";
+
+        if (isAdmin) {
+            text += "\n🛠 **管理员专享**\n";
+            text += "`/block @user` - 拉黑用户\n";
+            text += "`/unblock @user` - 解除拉黑/降权\n";
+            text += "`/grant @user` - 设为管理员\n";
+            text += "`/revoke @user` - 移除管理权限\n";
+            text += "`/view_logs [n]` - 查看最近 n 条日志\n";
+            text += "`/flush_logs` - 清理 1 小时前的日志\n";
+        }
+        await telegram.reply(message.chatId, text, message.messageId);
+        return true;
+    }
+
     if (cmd === "status") {
         const roles = userRoles.listAll();
         const text = roles.length === 0 ? "没有角色记录。"
@@ -24,15 +47,37 @@ export async function handleCommand(
         return true;
     }
 
-    const roleCmds = ["block", "unblock", "grant", "revoke"] as const;
-    if (!(roleCmds as any).includes(cmd)) return false;
+    // Admin-only commands below
+    const adminCmds = ["block", "unblock", "grant", "revoke", "flush_logs", "view_logs"];
+    if (!adminCmds.includes(cmd)) return false;
 
-    const callerRole = userRoles.getRole(message.userId);
-    if (callerRole !== "owner" && callerRole !== "admin") {
+    if (!isAdmin) {
         await telegram.reply(message.chatId, "管理员权限不足。", message.messageId);
         return true;
     }
 
+    if (cmd === "flush_logs") {
+        const deleted = logger.flush(1);
+        await telegram.reply(message.chatId, `清理完毕，已删除 1 小时前的 ${deleted} 条日志喵`, message.messageId);
+        return true;
+    }
+
+    if (cmd === "view_logs") {
+        const limit = parseInt(arg) || 20;
+        const logs = logger.getRecentLogs(limit);
+        if (logs.length === 0) {
+            await telegram.reply(message.chatId, "目前没有任何日志记录。", message.messageId);
+            return true;
+        }
+        const text = logs.map((l: any) => {
+            const time = new Date(l.timestamp).toLocaleTimeString();
+            return `\`[${time}] ${l.level.padEnd(5)} [${l.module}] ${l.message}\``;
+        }).join("\n");
+        await telegram.reply(message.chatId, ` **最近 ${logs.length} 条日志**:\n\n${text}`, message.messageId);
+        return true;
+    }
+
+    // Role modification commands require a target arg
     if (!arg) {
         await telegram.reply(message.chatId, `错误：未指定用户 (@username)`, message.messageId);
         return true;

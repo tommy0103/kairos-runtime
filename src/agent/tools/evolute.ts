@@ -7,6 +7,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { logger } from "../../utils/logger";
 
 interface EvoluteDetails {
   registeredToolName: string;
@@ -67,13 +68,13 @@ async function compileToolFromCode(code: string): Promise<AgentTool<any>> {
     throw new Error("code is required.");
   }
 
-  console.log("source", source);
+  logger.debug("Evolute", "开始编译工具代码", { sourceLength: source.length });
   const moduleSource = buildModuleSource(source);
   // const moduleSource = rewriteDefaultImports(buildModuleSource(source));
   // console.log("moduleSource", moduleSource);
   await mkdir(EVOLUTE_MODULE_DIR, { recursive: true });
   const detectedDeps = await detectExternalDependencies(source);
-  console.log("detectedDeps", detectedDeps);
+  logger.debug("Evolute", "检测到依赖", { detectedDeps });
   await ensureDependencies(detectedDeps, EVOLUTE_MODULE_DIR);
   const modulePath = join(
     EVOLUTE_MODULE_DIR,
@@ -128,11 +129,11 @@ async function compileToolFromCode(code: string): Promise<AgentTool<any>> {
     await mkdir(TOOL_CODE_DIR, { recursive: true });
     const codeUrl = `${TOOL_CODE_DIR}/${validatedTool.name}.ts`;
     await writeFile(codeUrl, code, "utf8");
-    await writeDependencySnapshot(validatedTool.name, detectedDeps);
+    writeDependencySnapshot(validatedTool.name, detectedDeps).catch(() => undefined);
     return validatedTool;
   } catch (error) {
     hasError = true;
-    console.error("error", error);
+    logger.error("Evolute", "编译工具失败", { error: String(error) });
     throw new Error(`Failed to compile tool from code: ${toErrorMessage(error)}`);
   } finally {
     if (!KEEP_EVOLUTE_MODULES && !hasError && validatedTool) {
@@ -167,15 +168,15 @@ function rewriteBuiltinDefaultImports(source: string): string {
 
 //     // 2. 如果是 TypeBox 这种本来就必须要 import { Type } 的，或者框架包，跳过
 //     // (可选：你可以保留 IGNORED_PACKAGE_NAMES 的过滤)
-    
+
 //     // 3. 生成一个中间层
 //     // 把 import cheerio from "cheerio"
 //     // 变成
 //     // import * as __import_cheerio_ns from "cheerio";
 //     // const cheerio = __import_cheerio_ns.default ?? __import_cheerio_ns;
-    
+
 //     const nsVar = `__ns_${localName}_${Math.random().toString(36).slice(2, 6)}`;
-    
+
 //     return `
 // import * as ${nsVar} from "${specifier}";
 // const ${localName} = ${nsVar}.default ?? ${nsVar};
@@ -271,7 +272,7 @@ async function detectExternalDependencies(code: string): Promise<string[]> {
     }
     return [...detected];
   } catch (error) {
-    console.error("error", error);
+    logger.error("Evolute", "依赖检测失败", { error: String(error) });
     throw new Error(`Failed to detect external dependencies: ${toErrorMessage(error)}`);
   }
 }
@@ -280,9 +281,9 @@ async function ensureDependencies(packageNames: string[], workDir: string): Prom
   if (packageNames.length === 0) {
     return;
   }
-  console.log("packageNames", packageNames);
+  logger.info("Evolute", `正在安装依赖: ${packageNames.join(", ")}`);
   await $`bun add ${packageNames.join(" ")}`.cwd(workDir).quiet();
-  console.log("ensureDependencies done");
+  logger.info("Evolute", "依赖安装完成");
 }
 
 async function getManagedDependencyVersions(): Promise<Record<string, string>> {
@@ -379,7 +380,7 @@ export function createEvoluteTool(): AgentTool<any, EvoluteDetails> {
     }),
     execute: async (toolCallId, params) => {
       const dynamicTool = await compileToolFromCode(params.code);
-      console.log("dynamicTool", dynamicTool);
+      logger.info("Evolute", `工具已生成并注册: ${dynamicTool.name}`);
       pendingEvolutedTools.set(toolCallId, dynamicTool);
       return {
         content: [

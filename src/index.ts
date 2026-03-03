@@ -18,6 +18,7 @@ import {
 } from "./gateway";
 import { createTelegramAdapter } from "./telegram/adapter";
 import { createUserRolesStore } from "./storage";
+import { logger } from "./utils/logger";
 import { fetch } from "bun";
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -79,7 +80,7 @@ const buildEnabledTools = () =>
     .map((name) => {
       const factory = toolFactories[name];
       if (!factory) {
-        console.warn(`Unknown tool skipped: ${name}`);
+        logger.warn("System", `跳过未知工具: ${name}`);
         return null;
       }
       return factory();
@@ -103,24 +104,24 @@ const enclaveClient = AGENT_ENCLAVE_TARGET
 
 const refreshTools = async () => {
   if (!agent) {
-    console.warn("refreshTools skipped: gRPC enclave mode is enabled.");
+    logger.warn("System", "跳过工具刷新: 当前处于 gRPC enclave 模式");
     return;
   }
   enabledToolNames = parseEnabledToolNames();
   await agent.replaceTools(buildEnabledTools());
-  console.log(`Tools refreshed: ${agent.listTools().join(", ")}`);
+  logger.info("System", `工具集已更新: ${agent.listTools().join(", ")}`);
 };
 
 process.on("SIGHUP", () => {
   refreshTools().catch((error) => {
-    console.error("Failed to refresh tools:", error);
+    logger.error("System", "工具刷新失败", { error: String(error) });
   });
 });
 
 const userRoles = createUserRolesStore();
 if (OWNER_USER_ID) {
   userRoles.setRole(OWNER_USER_ID, "owner");
-  console.log(`Owner registered: ${OWNER_USER_ID}`);
+  logger.info("System", `Owner 已注册: ${OWNER_USER_ID}`);
 }
 
 const runtime = createClientRuntime({
@@ -150,12 +151,12 @@ process.on("SIGTERM", () => {
 
 telegram.start().then(
   () => {
-    console.log("Telegram bot stopped.");
+    logger.info("System", "Telegram Bot 已停止");
   },
   (error) => {
-    console.error("Failed to start telegram bot:", error);
+    logger.error("System", "Telegram Bot 启动失败", { error: String(error) });
     process.exit(1);
   }
 );
 
-console.log("Telegram bot and message gateway are running.");
+logger.info("System", "Memoh-lite 启动成功喵", { ownerId: OWNER_USER_ID, model });

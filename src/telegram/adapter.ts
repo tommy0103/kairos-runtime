@@ -5,6 +5,7 @@ import type {
   TelegramConversationType,
   TelegramMessage,
 } from "./types";
+import { logger } from "../utils/logger";
 
 const DEFAULT_PLACEHOLDER = "小猫正在玩毛线球...";
 const DEFAULT_FINAL_TEXT = "(空内容)";
@@ -37,7 +38,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     messages.push(message);
     for (const handler of messageHandlers) {
       void Promise.resolve(handler(message)).catch((error) => {
-        console.error("telegram onMessage handler failed:", error);
+        logger.error("Telegram", "onMessage handler 失败", { error: String(error) });
       });
     }
   };
@@ -66,7 +67,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
       replyToUserId: sent.reply_to_message?.from?.id?.toString() ?? null,
       chunks: [],
     });
-    console.log("startStream", streams.get(streamId));
+    logger.debug("Telegram", "开始流式会话 (startStream)", { streamId, chatId });
     return streamId;
   };
 
@@ -273,13 +274,13 @@ function toOptionalMessageId(messageId?: number | string): number | undefined {
 }
 
 function isMentionMe(ctx: Context): boolean {
-//   const text = ctx.msg.text ?? "";
-    const message = ctx.msg;
-    if (!message) {
-        return false;
-    }
-    const text = message.text ?? "";
-    return text.includes(`@${ctx.me.username}`);
+  //   const text = ctx.msg.text ?? "";
+  const message = ctx.msg;
+  if (!message) {
+    return false;
+  }
+  const text = message.text ?? "";
+  return text.includes(`@${ctx.me.username}`);
 }
 
 function extractMentions(message: NonNullable<Context["message"]>): string[] {
