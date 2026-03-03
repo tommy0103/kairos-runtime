@@ -223,36 +223,36 @@ function safeWrite(
   }
 }
 
-const originalFetch = global.fetch;
+// const originalFetch = global.fetch;
 
-global.fetch = (async (...args) => {
-  const [url, config] = args;
+// global.fetch = (async (...args) => {
+//   const [url, config] = args;
   
-  // 试着解析请求的 body，看看是不是发给 LLM 的 Payload
-  if (config && typeof config.body === 'string') {
-    try {
-      const payload = JSON.parse(config.body);
+//   // 试着解析请求的 body，看看是不是发给 LLM 的 Payload
+//   if (config && typeof config.body === 'string') {
+//     try {
+//       const payload = JSON.parse(config.body);
       
-      if (payload.messages) {
-        console.log(`\n\n[🕵️ Network Intercept] 发送请求到: ${url}`);
-        // console.log("payload:", payload);
-        // 重点关注！打印出当前发送出去的所有工具名称
-        if (payload.tools) {
-          const toolNames = payload.tools.map((t: any) => 
-            t.function?.name || t.name || 'unknown'
-          );
-          console.log(`[🕵️ Network Intercept] 携带的 Tool Schema 列表:`, toolNames);
-        } else {
-          console.log(`[🕵️ Network Intercept] ⚠️ 本次请求没有携带任何工具！`);
-        }
-      }
-    } catch (e) {
-      // 解析失败就不管了，说明不是 JSON payload
-    }
-  }
+//       if (payload.messages) {
+//         console.log(`\n\n[🕵️ Network Intercept] 发送请求到: ${url}`);
+//         // console.log("payload:", payload);
+//         // 重点关注！打印出当前发送出去的所有工具名称
+//         if (payload.tools) {
+//           const toolNames = payload.tools.map((t: any) => 
+//             t.function?.name || t.name || 'unknown'
+//           );
+//           console.log(`[🕵️ Network Intercept] 携带的 Tool Schema 列表:`, toolNames);
+//         } else {
+//           console.log(`[🕵️ Network Intercept] ⚠️ 本次请求没有携带任何工具！`);
+//         }
+//       }
+//     } catch (e) {
+//       // 解析失败就不管了，说明不是 JSON payload
+//     }
+//   }
 
-  return originalFetch(...args);
-}) as typeof global.fetch;
+//   return originalFetch(...args);
+// }) as typeof global.fetch;
 
 const server = new grpc.Server({
   "grpc.max_send_message_length": MAX_GRPC_MESSAGE_BYTES,

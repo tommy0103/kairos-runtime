@@ -169,12 +169,13 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     generateOptions = {}
   ) {
     const model = createCompatibleModel(generateOptions.model ?? options.defaultModel, options.baseURL);
-    const prompt = extractLatestUserPrompt(messages);
+    // const prompt = extractLatestUserPrompt(messages);
     const systemPrompt = extractSystemPrompt(messages);
-    if (!prompt.trim()) {
-      yield { type: "completed" };
-      return;
-    }
+    // if (!prompt.trim()) {
+    //   yield { type: "completed" };
+    //   return;
+    // }
+    console.log("LoopRunner messages", messages);
 
     const loopContext: AgentContext = {
       systemPrompt,
@@ -188,9 +189,10 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     let currentMessageTextBuffer = "";
     let globalMessageHasEmitted = false;
     try {
-      const userPrompt = { role: "user", content: prompt, timestamp: Date.now() } as AgentMessage;
+      // const userPrompt = { role: "user", content: prompt, timestamp: Date.now() } as AgentMessage;
       const stream = agentLoop(
-        [userPrompt],
+        // [userPrompt],
+        messages as AgentMessage[],
         loopContext,
         {
           model,
@@ -272,6 +274,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
               syncToolsInPlace(loopContext, latestTools);
             }
           }
+          console.log("tool_execution_end", event.result);
           yield {
             type: "tool_execution_end",
             toolName: event.toolName,

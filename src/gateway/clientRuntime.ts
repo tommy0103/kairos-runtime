@@ -54,6 +54,7 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
       prompt,
       systemPrompt: system(),
     });
+    // console.log("llmMessages", llmMessages);
     void (async () => {
       try {
         for await (const event of enclaveClient.streamReply({

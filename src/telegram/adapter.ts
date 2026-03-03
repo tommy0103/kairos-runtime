@@ -349,14 +349,24 @@ function isRetryableNetworkError(error: unknown): boolean {
 }
 
 function escapeText(text: string): string {
+  const escapeMarkdownV2 = (value: string): string =>
+    value.replace(/[\\_*\[\]()~>#+\-=|{}.!]/g, "\\$&");
+  const escapeMarkdownV2Url = (value: string): string =>
+    value.replace(/[\\)]/g, "\\$&");
   const placeholders: string[] = [];
-  const protectedText = text.replace(/\[[^\]\n]+\]\([^\)\n]+\)/g, (match) => {
-    const token = `\u0000LINK${placeholders.length}\u0000`;
-    placeholders.push(match);
-    return token;
-  });
 
-  const escaped = protectedText.replace(/[\\_*\[\]()~>#+\-=|{}.!]/g, "\\$&");
+  const protectedText = text.replace(
+    /\[([^\]\n]+)\]\(([^)\n]+)\)/g,
+    (_, label: string, url: string) => {
+      const token = `\u0000LINK${placeholders.length}\u0000`;
+      const escapedLabel = escapeMarkdownV2(label);
+      const escapedUrl = escapeMarkdownV2Url(url);
+      placeholders.push(`[${escapedLabel}](${escapedUrl})`);
+      return token;
+    }
+  );
+
+  const escaped = escapeMarkdownV2(protectedText);
   return escaped.replace(/\u0000LINK(\d+)\u0000/g, (_, indexText: string) => {
     const index = Number(indexText);
     return placeholders[index] ?? "";

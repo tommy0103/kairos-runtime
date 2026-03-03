@@ -43,7 +43,9 @@ package-lock.json
 **/*.bun
 
 # memory files
-src/agent/memory_files
+src/agent/memory_files/Identity.md
+src/agent/memory_files/Identity.backup.md
+src/agent/memory_files/Tools.md
 
 # dev docs
 .dev.docs
