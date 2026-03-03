@@ -71,11 +71,19 @@ export async function handleCommand(
             await telegram.reply(message.chatId, "目前没有任何日志记录。", message.messageId);
             return true;
         }
-        // 使用代码块展示日志周期，防止特殊字符导致加粗效果干扰
-        const text = logs.map((l: any) => {
+        // 使用代码块展示日志，防止特殊字符干扰。同时处理 Telegram 4096 字符限制。
+        let text = logs.map((l: any) => {
             const time = new Date(l.timestamp).toLocaleTimeString();
             return `[${time}] ${l.level.padEnd(5)} [${l.module}] ${l.message}`;
         }).join("\n");
+
+        if (text.length > 3900) {
+            text = text.slice(-3900);
+            // 确保截断处在换行符，并加上提示
+            const firstNewline = text.indexOf("\n");
+            text = "(数据过长，已截断并仅显示末尾部分...)\n" + (firstNewline > -1 ? text.slice(firstNewline + 1) : text);
+        }
+
         await telegram.reply(message.chatId, ` 最近 ${logs.length} 条日志:\n\n\`\`\`\n${text}\n\`\`\``, message.messageId);
         return true;
     }
