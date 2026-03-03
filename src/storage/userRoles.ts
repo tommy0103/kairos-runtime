@@ -63,8 +63,8 @@ export function createUserRolesStore(dbPath = "data/memoh.db"): UserRolesStore {
         },
 
         removeRole: (userId) => {
-            const changes = db.run("DELETE FROM user_roles WHERE user_id = ?", [userId]).changes;
-            return changes > 0;
+            stmtDelete.run(userId);
+            return db.query<{ c: number }, []>("SELECT changes() AS c").get()?.c !== 0;
         },
 
         isBlocked: (userId) => {
