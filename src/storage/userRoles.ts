@@ -17,9 +17,9 @@ export interface UserRolesStore {
     removeRole: (userId: string) => boolean;
     isBlocked: (userId: string) => boolean;
     listAll: () => UserRoleEntry[];
-    /** Track a username→userId mapping from incoming messages */
+    /** 映射用户名到 ID */
     trackUser: (userId: string, username: string) => void;
-    /** Resolve a username to userId, returns null if unknown */
+    /** 通过用户名查找 ID */
     resolveUserId: (username: string) => string | null;
 }
 
@@ -32,6 +32,14 @@ export function createUserRolesStore(dbPath = "data/memoh.db"): UserRolesStore {
     }
 
     const db = new Database(dbPath, { create: true });
+
+    // 自动迁移：如果数据库里是旧的 alias，自动改成 username
+    const tableInfo = db.query<any, [string]>("PRAGMA table_info(user_roles)").all("user_roles");
+    const hasAlias = tableInfo.some(c => c.name === "alias");
+    const hasUsername = tableInfo.some(c => c.name === "username");
+    if (hasAlias && !hasUsername) {
+        db.run("ALTER TABLE user_roles RENAME COLUMN alias TO username");
+    }
 
     db.run(`
     CREATE TABLE IF NOT EXISTS user_roles (
@@ -50,7 +58,7 @@ export function createUserRolesStore(dbPath = "data/memoh.db"): UserRolesStore {
   `);
     db.run(`
     CREATE INDEX IF NOT EXISTS idx_known_users_username
-    ON known_users (username)
+    ON known_users (username COLLATE NOCASE)
   `);
 
     const stmtGet = db.query<{ role: string }, [string]>(

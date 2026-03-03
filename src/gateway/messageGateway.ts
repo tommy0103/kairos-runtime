@@ -7,6 +7,7 @@ import type {
 } from "./types";
 import type { UserRolesStore } from "../storage";
 import { handleCommand } from "./commandHandler";
+import { logger } from "../utils/logger";
 
 const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
@@ -40,7 +41,7 @@ export function createMessageGateway(
   });
 
   const handleMessage = async (message: TelegramMessage) => {
-    console.log("handleMessage", message);
+    logger.info("Gateway", `收到消息: ${message.context.slice(0, 50)}${message.context.length > 50 ? "..." : ""}`, { chatId: message.chatId, userId: message.userId });
     options.runtime.recordMessage(message);
 
     // track username→userId mapping
@@ -49,7 +50,7 @@ export function createMessageGateway(
     }
 
     // handle /commands before anything else
-    if (options.userRoles && /\/(?:block|unblock|status|grant|revoke)\b/.test(message.context)) {
+    if (options.userRoles && /\/(?:block|unblock|status|grant|revoke|help|view_logs|flush_logs)\b/.test(message.context)) {
       const handled = await handleCommand(message, options.userRoles, options.telegram);
       if (handled) return;
     }
@@ -107,6 +108,7 @@ export function createMessageGateway(
         );
       }
       console.error("message gateway stream failed:", error);
+      logger.error("Gateway", "流式回复失败", { error: String(error) });
     }
   };
 

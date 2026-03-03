@@ -6,6 +6,7 @@ import {
 } from "@mariozechner/pi-agent-core";
 import type { Message, Model } from "@mariozechner/pi-ai";
 import { consumePendingEvolutedTool } from "../tools/evolute";
+import { logger } from "../../utils/logger";
 
 export interface AgentLoopMessage {
   role: "system" | "user" | "assistant";
@@ -31,28 +32,28 @@ export interface AgentLoopRunner {
 
 export type AgentLoopStreamEvent =
   | {
-      type: "message_update";
-      role: "assistant";
-      delta: string;
-    }
+    type: "message_update";
+    role: "assistant";
+    delta: string;
+  }
   | {
-      type: "tool_execution_start";
-      toolName: string;
-      toolCallId?: string;
-    }
+    type: "tool_execution_start";
+    toolName: string;
+    toolCallId?: string;
+  }
   | {
-      type: "tool_execution_end";
-      toolName: string;
-      toolCallId?: string;
-      result?: unknown;
-    }
+    type: "tool_execution_end";
+    toolName: string;
+    toolCallId?: string;
+    result?: unknown;
+  }
   | {
-      type: "completed";
-    }
+    type: "completed";
+  }
   | {
-      type: "failed";
-      error: string;
-    };
+    type: "failed";
+    error: string;
+  };
 
 export interface CreateAgentLoopRunnerOptions {
   apiKey: string;
@@ -175,7 +176,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     //   yield { type: "completed" };
     //   return;
     // }
-    console.log("LoopRunner messages", messages);
+    logger.debug("Agent", "LoopRunner 开始迭代", { messageCount: messages.length });
 
     const loopContext: AgentContext = {
       systemPrompt,
@@ -274,7 +275,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
               syncToolsInPlace(loopContext, latestTools);
             }
           }
-          console.log("tool_execution_end", event.result);
+          logger.info("Agent", `工具执行结束: ${event.toolName}`, { result: event.result });
           yield {
             type: "tool_execution_end",
             toolName: event.toolName,
@@ -285,7 +286,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
         }
 
         if (event.type === "tool_execution_start") {
-          console.log("tool_execution_start", event);
+          logger.info("Agent", `工具开始执行: ${event.toolName}`);
           yield {
             type: "tool_execution_start",
             toolName: event.toolName,
@@ -298,10 +299,8 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
       if (!globalMessageHasEmitted) {
         const newMessages = await stream.result();
         const fallbackText = extractAssistantTextFromMessages(newMessages);
-        console.log(
-          `[loopRunner] fallback extraction: found=${Boolean(fallbackText)} length=${fallbackText.length}`
-        );
         if (fallbackText) {
+          logger.debug("Agent", "由于流中断，使用 Fallback 提取文本");
           yield {
             type: "message_update",
             role: "assistant",

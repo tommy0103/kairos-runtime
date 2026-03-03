@@ -12,6 +12,7 @@ import {
   createRunSafeBashTool,
   createWriteFileSafeTool,
 } from "../../tools";
+import { logger } from "../../../utils/logger";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PROTO_PATH = resolve(CURRENT_DIR, "../../proto/enclave.proto");
@@ -52,7 +53,7 @@ function buildEnabledTools(enabledToolNames: Set<string>) {
     .map((name) => {
       const factory = toolFactories[name];
       if (!factory) {
-        console.warn(`[enclave] unknown tool skipped: ${name}`);
+        logger.warn("Enclave", `跳过未知工具: ${name}`);
         return null;
       }
       return factory();
@@ -218,7 +219,7 @@ function safeWrite(
     call.write(event);
     return true;
   } catch (error) {
-    console.error("[enclave] stream write failed:", error);
+    logger.error("Enclave", "数据流写入失败", { error: String(error) });
     return false;
   }
 }
@@ -227,12 +228,12 @@ function safeWrite(
 
 // global.fetch = (async (...args) => {
 //   const [url, config] = args;
-  
+
 //   // 试着解析请求的 body，看看是不是发给 LLM 的 Payload
 //   if (config && typeof config.body === 'string') {
 //     try {
 //       const payload = JSON.parse(config.body);
-      
+
 //       if (payload.messages) {
 //         console.log(`\n\n[🕵️ Network Intercept] 发送请求到: ${url}`);
 //         // console.log("payload:", payload);
@@ -263,10 +264,10 @@ server.addService(service, {
     call: grpc.ServerWritableStream<GrpcStreamReplyRequest, GrpcStreamReplyEvent>
   ) => {
     call.on("error", (error) => {
-      console.error("[enclave] grpc stream error:", error);
+      logger.error("Enclave", "gRPC 流错误", { error: String(error) });
     });
     call.on("cancelled", () => {
-      console.warn("[enclave] grpc stream cancelled by client");
+      logger.warn("Enclave", "客户端取消了 gRPC 流");
     });
     try {
       const request = call.request;
@@ -293,10 +294,10 @@ server.bindAsync(
   grpc.ServerCredentials.createInsecure(),
   (error) => {
     if (error) {
-      console.error("[enclave] failed to bind grpc server:", error);
+      logger.error("Enclave", "gRPC 服务器绑定失败", { error: String(error) });
       process.exit(1);
     }
-    console.log(`[enclave] grpc server listening on ${DEFAULT_BIND_ADDR}`);
+    logger.info("Enclave", `gRPC 服务已启动，监听地址: ${DEFAULT_BIND_ADDR}`);
   }
 );
 

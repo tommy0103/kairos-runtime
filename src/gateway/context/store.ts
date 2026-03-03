@@ -1,5 +1,6 @@
 import type { TelegramMessage } from "../../telegram/types";
 import type { ContextStore } from "./types";
+import { logger } from "../../utils/logger";
 
 export interface CreateInMemoryContextStoreOptions {
   maxHistoryPerChat?: number;
@@ -19,7 +20,7 @@ export function createInMemoryContextStore(
         history.splice(0, history.length - maxHistoryPerChat);
       }
       historyByChat.set(message.chatId, history);
-      console.log("history", history);
+      logger.debug("Gateway", "Session History Updated", { chatId: message.chatId, historySize: history.length });
     },
     getByChat: (chatId) => [...(historyByChat.get(chatId) ?? [])],
   };
