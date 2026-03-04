@@ -54,3 +54,6 @@ src/agent/tools/evolutions
 
 # storage
 data/
+
+# logs
+.memoh-debug

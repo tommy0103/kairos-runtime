@@ -23,6 +23,12 @@ const chunk = <T>(items: T[], chunkSize: number): T[][] => {
   return result;
 };
 
+const normalizeVector = (vector: number[]): number[] => {
+  const magnitude = Math.hypot(...vector);
+  if (magnitude === 0) return vector;
+  return vector.map((value) => value / magnitude);
+};
+
 const ensureEmbeddings = (
   data: unknown,
   expectedLength: number,
@@ -72,7 +78,11 @@ export const createOllamaDenseEmbedder = (
         }
 
         const data = await response.json();
-        output.push(...ensureEmbeddings(data, batch.length));
+        output.push(
+          ...ensureEmbeddings(data, batch.length).map((vector) =>
+            normalizeVector(vector),
+          ),
+        );
       }
       return output;
     },

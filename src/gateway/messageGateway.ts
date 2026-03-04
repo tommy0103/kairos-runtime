@@ -42,7 +42,7 @@ export function createMessageGateway(
 
   const handleMessage = async (message: TelegramMessage) => {
     logger.info("Gateway", `收到消息: ${message.context.slice(0, 50)}${message.context.length > 50 ? "..." : ""}`, { chatId: message.chatId, userId: message.userId });
-    options.runtime.recordMessage(message);
+    await options.runtime.recordMessage(message);
 
     // track username→userId mapping
     if (options.userRoles && message.metadata.username) {

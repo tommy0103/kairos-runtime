@@ -1,4 +1,7 @@
 import type { OpenAIAgent } from "../agent/core/openai";
+import { appendFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { inspect } from "node:util";
 import type { TelegramMessage } from "../telegram/types";
 import { system } from "../agent/prompt";
 import { RemoteAsyncIterable } from "../agent/remoteAsyncIterable";
@@ -12,7 +15,7 @@ import {
 } from "./context";
 
 export interface ClientRuntime {
-  recordMessage: (message: TelegramMessage) => void;
+  recordMessage: (message: TelegramMessage) => Promise<void>;
   streamReply: (input: {
     triggerMessage: TelegramMessage;
     prompt: string;
@@ -22,10 +25,15 @@ export interface ClientRuntime {
 export interface CreateClientRuntimeOptions {
   agent?: OpenAIAgent;
   enclaveClient?: AgentEnclaveClient;
-  maxHistoryPerChat?: number;
   contextStore?: ContextStore;
   contextAssembler?: ContextAssembler;
 }
+
+const SESSION_DEBUG_LOG_PATH = join(
+  process.cwd(),
+  ".memoh-debug",
+  "session-control-blocks.log"
+);
 
 export function createClientRuntime(options: CreateClientRuntimeOptions): ClientRuntime {
   const enclaveClient =
@@ -35,23 +43,36 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
   }
 
   const contextStore =
-    options.contextStore ??
-    createInMemoryContextStore({
-      maxHistoryPerChat: options.maxHistoryPerChat,
-    });
+    options.contextStore ?? createInMemoryContextStore();
   const contextAssembler = options.contextAssembler ?? createContextAssembler();
 
-  const recordMessage: ClientRuntime["recordMessage"] = (message) => {
-    contextStore.append(message);
+  const recordMessage: ClientRuntime["recordMessage"] = async (message) => {
+    await contextStore.ingestMessage({ message });
+    const lines: string[] = [];
+    contextStore.debugPrintSessionControlBlocks({
+      chatId: message.chatId,
+      log: (...args: unknown[]) => {
+        lines.push(args.map((arg) => inspect(arg, { depth: null, compact: true })).join(" "));
+      },
+    });
+    if (lines.length > 0) {
+      await mkdir(join(process.cwd(), ".memoh-debug"), { recursive: true });
+      const stamp = new Date().toISOString();
+      const header = `\n[${stamp}] chatId=${message.chatId} messageId=${message.messageId}\n`;
+      await appendFile(SESSION_DEBUG_LOG_PATH, `${header}${lines.join("\n")}\n`, "utf8");
+    }
   };
 
   const streamReply: ClientRuntime["streamReply"] = ({ triggerMessage, prompt }) => {
     const stream = new RemoteAsyncIterable<string>();
-    const history = contextStore.getByChat(triggerMessage.chatId);
+    const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
+      chatId: triggerMessage.chatId,
+      messageId: triggerMessage.messageId,
+    });
     const llmMessages = contextAssembler.build({
-      history,
+      contextMessages: sessionMessages,
+      recentMessages,
       triggerMessage,
-      prompt,
       systemPrompt: system(),
     });
     // console.log("llmMessages", llmMessages);
