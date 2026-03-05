@@ -5,6 +5,11 @@ export function createPrivateChatTriggerPolicy(): GatewayTriggerPolicy {
     name: "PrivateChat",
     priority: 5, // 优先级最高，确保私信能被最先捕获
     decide: (message, context) => {
+      // 核心防御：如果消息是机器人自己发出的，绝对不触发响应逻辑，防止死循环。
+      if (message.metadata.isBot) {
+        return { shouldTrigger: false, reason: "none" };
+      }
+
       // 只有私信会话才进入本逻辑
       if (message.conversationType !== "private") {
         return { shouldTrigger: false, reason: "none" };
