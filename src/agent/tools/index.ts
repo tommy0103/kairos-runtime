@@ -5,3 +5,4 @@ export * from "./writeFileSafe";
 export * from "./listFilesSafe";
 export * from "./evolute";
 export * from "./apoptosis";
+export * from "./updateUserMemory";

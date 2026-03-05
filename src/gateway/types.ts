@@ -1,12 +1,14 @@
 import type { ClientRuntime } from "./clientRuntime";
 import type { TelegramAdapter, TelegramMessage } from "../telegram/types";
+import type { UserRolesStore } from "../storage";
 
 export interface GatewayContext {
   telegram: TelegramAdapter;
   runtime: ClientRuntime;
+  userRoles?: UserRolesStore;
 }
 
-export type TriggerReason = "mention_me" | "reply_to_me" | "none";
+export type TriggerReason = "mention_me" | "reply_to_me" | "private_chat" | "none";
 
 export interface TriggerDecision {
   shouldTrigger: boolean;

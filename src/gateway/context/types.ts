@@ -53,6 +53,7 @@ export interface ContextAssemblerBuildInput {
   contextMessages: TelegramMessage[];
   recentMessages: TelegramMessage[];
   systemPrompt: string;
+  userFacts?: string[]; // 长期记忆事实
 }
 
 export interface ContextAssembler {

@@ -26,6 +26,7 @@ export function createMessageGateway(
   const context: GatewayContext = {
     telegram: options.telegram,
     runtime: options.runtime,
+    userRoles: options.userRoles,
   };
 
   const policies = [...options.policies].sort(

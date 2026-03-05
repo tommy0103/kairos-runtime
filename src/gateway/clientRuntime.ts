@@ -15,6 +15,7 @@ import {
 } from "./context";
 import { createOllamaLocalModel, createOpenAICloudModel } from "../llm";
 import { createOllamaDenseEmbedder } from "../embedding";
+import { createUserMemoryStore } from "../storage/userMemory";
 
 export interface ClientRuntime {
   recordMessage: (message: TelegramMessage) => Promise<void>;
@@ -84,15 +85,21 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
       chatId: triggerMessage.chatId,
       messageId: triggerMessage.messageId,
     });
-    const llmMessages = contextAssembler.build({
-      contextMessages: sessionMessages,
-      recentMessages,
-      triggerMessage,
-      systemPrompt: system(),
-    });
-    // console.log("llmMessages", llmMessages);
+    
     void (async () => {
       try {
+        // 异步获取长期记忆
+        const memoryStore = createUserMemoryStore();
+        const userFacts = await memoryStore.getFacts(triggerMessage.userId);
+
+        const llmMessages = contextAssembler.build({
+          contextMessages: sessionMessages,
+          recentMessages,
+          triggerMessage,
+          systemPrompt: system(),
+          userFacts, // 传入获取到的记忆事实
+        });
+
         for await (const event of enclaveClient.streamReply({
           chatId: triggerMessage.chatId,
           messages: llmMessages,

@@ -8,6 +8,7 @@ import {
   createReadFileSafeTool,
   createRunSafeBashTool,
   createWriteFileSafeTool,
+  createUpdateUserMemoryTool,
 } from "./agent";
 import type { OpenAIAgent } from "./agent";
 import {
@@ -15,6 +16,7 @@ import {
   createMentionMeTriggerPolicy,
   createMessageGateway,
   createReplyToMeTriggerPolicy,
+  createPrivateChatTriggerPolicy,
 } from "./gateway";
 import { createTelegramAdapter } from "./telegram/adapter";
 import { createUserRolesStore } from "./storage";
@@ -53,6 +55,7 @@ if (!AGENT_ENCLAVE_TARGET && !API_KEY) {
 
 const toolFactories: Record<string, () => any> = {
   fetch_webpage: createFetchWebpageTool,
+  update_user_memory: createUpdateUserMemoryTool,
   // run_safe_bash: createRunSafeBashTool,
   // read_file_safe: createReadFileSafeTool,
   // write_file_safe: createWriteFileSafeTool,
@@ -130,6 +133,7 @@ const gateway = createMessageGateway({
   telegram,
   runtime,
   policies: [
+    createPrivateChatTriggerPolicy(),
     createReplyToMeTriggerPolicy(),
     createMentionMeTriggerPolicy(),
   ],
