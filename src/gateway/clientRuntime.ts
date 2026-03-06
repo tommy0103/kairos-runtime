@@ -52,9 +52,9 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
       }),
       // localModel: createOllamaLocalModel(),
       cloudModel: createOpenAICloudModel({
-        apiKey: process.env.ARK_API_KEY,
-        baseURL: "https://ark.cn-beijing.volces.com/api/v3",
-        model: "doubao-seed-2-0-lite-260215",
+        apiKey: process.env.SUMMARIZER_API_KEY,
+        baseURL: process.env.SUMMARIZER_BASE_URL ?? "https://ark.cn-beijing.volces.com/api/v3",
+        model: process.env.SUMMARIZER_MODEL ?? "doubao-seed-2-0-lite-260215",
         // apiKey: process.env.DEEPSEEK_API_KEY,
         // baseURL: "https://api.deepseek.com/v1",
         // model: "deepseek-chat",
