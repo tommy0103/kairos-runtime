@@ -1,2 +1,0 @@
-[env]
-PROTOC = { value = ".cargo/protoc-wrapper.sh", relative = true, force = true }
