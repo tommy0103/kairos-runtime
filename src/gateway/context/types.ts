@@ -39,6 +39,8 @@ export type ContextMessagesPair = [recentMessages: TelegramMessage[], sessionMes
 export interface ContextStore {
   ingestMessage: (input: { message: TelegramMessage }) => Promise<void>;
   getContextByAnchor: (input: { chatId: number; messageId: number }) => ContextMessagesPair;
+  /** 获取指定 Chat 的最近 N 条历史消息（暴力线性模式） */
+  getLinearContext: (input: { chatId: number; limit: number }) => TelegramMessage[];
   /** For evaluation: return sessionId for a message, or null if not found. */
   getSessionIdForMessage?: (input: { chatId: number; messageId: number }) => string | null;
   debugPrintSessionControlBlocks: (input?: {

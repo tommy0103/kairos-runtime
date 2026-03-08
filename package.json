@@ -20,10 +20,12 @@
     "elysia": "latest",
     "es-module-lexer": "^2.0.0",
     "grammy": "^1.40.0",
+    "hyparquet": "^1.25.1",
+    "input": "^1.0.1",
     "mathjs": "^15.1.1",
     "openai": "^6.22.0",
-    "hyparquet": "^1.25.1",
     "playwright": "^1.58.2",
+    "telegram": "^2.26.22",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

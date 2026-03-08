@@ -72,6 +72,30 @@ export function createInMemoryContextStore(
       const now = message.timestamp;
       const chatId = message.chatId;
       const messageId = message.messageId;
+      const mode = process.env.CONTEXT_MODE;
+
+      /**
+       * 暴力模式优化：
+       * 如果开启了 bruteforce 模式，我们直接将消息存入节点，
+       * 彻底跳过 Embedding 计算和 Reranker 会话切分逻辑。
+       * 这样可以极大地降低 CPU 负载并防止 OOM。
+       */
+      if (mode === "bruteforce") {
+        const ccb = getOrCreateChatControlBlock(chatControlBlocks, chatId);
+        const node: MessageNode = {
+          message,
+          messageId,
+          timestamp: message.timestamp,
+          replyToId: null,
+          childrenIds: [],
+          sessionId: "bruteforce_global",
+          vector: [], // 暴力模式不需要向量
+        };
+        ccb.messageNodes.set(messageId, node);
+        updateLastMessageNodeId(ccb, node);
+        return;
+      }
+
       const isShortMessage = message.context.length <= SHORT_MESSAGE_LENGTH;
       const ccb = getOrCreateChatControlBlock(chatControlBlocks, chatId);
       downgradeExpiredSessions(ccb, now, SESSION_LRU_EXPIRE_MS);
@@ -219,6 +243,20 @@ export function createInMemoryContextStore(
         .sort((a, b) => a.timestamp - b.timestamp)
         .map((item) => item.message);
       return [recentMessages, sessionMessages];
+    },
+    getLinearContext: ({ chatId, limit }) => {
+      const ccb = chatControlBlocks.get(chatId);
+      if (!ccb) return [];
+
+      // 获取所有消息节点，按时间倒序排列以获取最新的 limit 条
+      const allMessages = Array.from(ccb.messageNodes.values())
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, limit)
+        // 再次正序排列，确保发给模型时是符合对话逻辑的时间流
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .map((node) => node.message);
+
+      return allMessages;
     },
     getSessionIdForMessage: ({ chatId, messageId }) => {
       const ccb = chatControlBlocks.get(chatId);

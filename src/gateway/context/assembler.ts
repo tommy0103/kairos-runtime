@@ -5,29 +5,43 @@ export function createContextAssembler(): ContextAssembler {
   return {
     build: ({ contextMessages, recentMessages, triggerMessage, systemPrompt, userFacts }) => {
       const triggerId = triggerMessage.messageId;
+      const mode = process.env.CONTEXT_MODE;
+
+      /**
+       * 暴力线性模式 (Bruteforce Mode):
+       * 彻底关闭 Reranker、Session 分类和事实提取记忆。
+       * 将 1M 上下文全部用于填充原始聊天记录，不进行任何语义加工。
+       */
+      if (mode === "bruteforce") {
+        const history = contextMessages
+          .filter((m) => m.messageId !== triggerId)
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .map((m) => `${getSpeaker(m)} [${formatTimestampUtc8(m.timestamp)}]: ${m.context}`)
+          .join("\n");
+
+        const payload = `这是我们所有的聊天记录（按时间线排列）：\n\n${history}\n${getSpeaker(triggerMessage)} [${formatTimestampUtc8(triggerMessage.timestamp)}]: ${triggerMessage.context}`;
+
+        return [
+          { role: "system", content: `${systemPrompt}\n\n注意：你现在处于暴力历史注入模式，你拥有完整的聊天记忆，请基于以上全量历史进行回答。` },
+          { role: "user", content: payload }
+        ];
+      }
       
-      // 过滤并按时间排序最近的消息
+      // 传统模式逻辑...
       const normalizedRecent = recentMessages
         .filter((item) => item.messageId !== triggerId)
         .slice()
         .sort((a, b) => a.timestamp - b.timestamp);
         
-      // 过滤并按时间排序语义相关的历史消息
       const normalizedContext = contextMessages
         .filter((item) => item.messageId !== triggerId)
         .slice()
         .sort((a, b) => a.timestamp - b.timestamp);
 
-      /**
-       * 长期记忆事实 (Facts) 组织逻辑：
-       * 如果存在 userFacts 且不为空，则将其包装在 <long_term_memory> 标签内。
-       * 这是为了让模型了解它对该用户已掌握的事实，作为对话背景。
-       */
       const memoryXml = userFacts && userFacts.length > 0
         ? `\n<long_term_memory>\n${userFacts.map(f => `  <fact>${escapeXml(f)}</fact>`).join("\n")}\n</long_term_memory>`
         : "";
 
-      // 构建最终发送给 LLM 的上下文 XML 结构
       const xml = `<context>${memoryXml}
   <recent_messages>
 ${normalizedRecent.map(formatMessageNode).join("\n")}

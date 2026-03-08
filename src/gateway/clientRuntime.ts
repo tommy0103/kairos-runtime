@@ -16,6 +16,7 @@ import {
 import { createOllamaLocalModel, createOpenAICloudModel } from "../llm";
 import { createOllamaDenseEmbedder } from "../embedding";
 import { createUserMemoryStore } from "../storage/userMemory";
+import { createUserbotClient } from "../telegram/userbot";
 
 export interface ClientRuntime {
   recordMessage: (message: TelegramMessage) => Promise<void>;
@@ -25,11 +26,14 @@ export interface ClientRuntime {
   }) => AsyncIterable<string>;
 }
 
+import { createUserbotClient } from "../telegram/userbot";
+
 export interface CreateClientRuntimeOptions {
   agent?: OpenAIAgent;
   enclaveClient?: AgentEnclaveClient;
   contextStore?: ContextStore;
   contextAssembler?: ContextAssembler;
+  userbot?: Awaited<ReturnType<typeof createUserbotClient>>;
 }
 
 const SESSION_DEBUG_LOG_PATH = join(
@@ -81,23 +85,77 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
 
   const streamReply: ClientRuntime["streamReply"] = ({ triggerMessage, prompt }) => {
     const stream = new RemoteAsyncIterable<string>();
-    const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
-      chatId: triggerMessage.chatId,
-      messageId: triggerMessage.messageId,
-    });
     
     void (async () => {
       try {
-        // 异步获取长期记忆
-        const memoryStore = createUserMemoryStore();
-        const userFacts = await memoryStore.getFacts(triggerMessage.userId);
+        const mode = process.env.CONTEXT_MODE || "session";
+        
+        let contextMessages: TelegramMessage[];
+        let recentMessages: TelegramMessage[];
+        let userFacts: string[] | undefined = undefined;
+
+        if (mode === "bruteforce") {
+          /**
+           * 暴力全量模式：
+           * 1. 优先调用 Userbot (MTProto) 直接从 Telegram 服务器拉取最近 1000 条真实消息。
+           * 2. 如果 Userbot 未配置，则回退到内存中的 LinearContext。
+           */
+          const bruteforceLimit = parseInt(process.env.MAX_BRUTEFORCE_MESSAGES || "1000", 10);
+
+          if (options.userbot) {
+            try {
+              const remoteHistory = await options.userbot.getHistory(triggerMessage.chatId, bruteforceLimit);
+              if (remoteHistory.length > 0) {
+                // 将 Userbot 获取的历史映射为系统通用的消息格式
+                contextMessages = remoteHistory.map(m => ({
+                  ...m,
+                  chatId: triggerMessage.chatId,
+                  messageId: 0, // Userbot 消息 ID 暂不用于锚点
+                  conversationType: triggerMessage.conversationType,
+                })) as TelegramMessage[];
+              } else {
+                contextMessages = contextStore.getLinearContext({ chatId: triggerMessage.chatId, limit: bruteforceLimit });
+              }
+            } catch (err) {
+              console.error("[Userbot] 远程拉取失败，回退内存:", err);
+              contextMessages = contextStore.getLinearContext({ chatId: triggerMessage.chatId, limit: bruteforceLimit });
+            }
+          } else {
+            contextMessages = contextStore.getLinearContext({ chatId: triggerMessage.chatId, limit: bruteforceLimit });
+          }
+
+          recentMessages = [];
+          userFacts = undefined;
+        }
+ else if (mode === "linear") {
+          const linearLimit = parseInt(process.env.MAX_LINEAR_MESSAGES || "50", 10);
+          contextMessages = contextStore.getLinearContext({ 
+            chatId: triggerMessage.chatId, 
+            limit: linearLimit 
+          });
+          recentMessages = [];
+          // 线性模式仍可使用记忆事实
+          const memoryStore = createUserMemoryStore();
+          userFacts = await memoryStore.getFacts(triggerMessage.userId);
+        } else {
+          // 传统会话模式
+          const [recent, session] = contextStore.getContextByAnchor({
+            chatId: triggerMessage.chatId,
+            messageId: triggerMessage.messageId,
+          });
+          recentMessages = recent;
+          contextMessages = session;
+          // 传统模式使用记忆事实
+          const memoryStore = createUserMemoryStore();
+          userFacts = await memoryStore.getFacts(triggerMessage.userId);
+        }
 
         const llmMessages = contextAssembler.build({
-          contextMessages: sessionMessages,
+          contextMessages,
           recentMessages,
           triggerMessage,
           systemPrompt: system(),
-          userFacts, // 传入获取到的记忆事实
+          userFacts,
         });
 
         for await (const event of enclaveClient.streamReply({

@@ -19,6 +19,7 @@ import {
   createPrivateChatTriggerPolicy,
 } from "./gateway";
 import { createTelegramAdapter } from "./telegram/adapter";
+import { createUserbotClient } from "./telegram/userbot";
 import { createUserRolesStore } from "./storage";
 import { fetch } from "bun";
 
@@ -90,6 +91,22 @@ const buildEnabledTools = () =>
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
 
 const telegram = createTelegramAdapter(BOT_TOKEN);
+
+// 初始化 Userbot (MTProto 数据泵)，仅在暴力全量模式下发挥威力
+let userbot: Awaited<ReturnType<typeof createUserbotClient>> | undefined = undefined;
+if (process.env.TELEGRAM_API_ID && process.env.TELEGRAM_API_HASH && process.env.TELEGRAM_STRING_SESSION) {
+  try {
+    userbot = await createUserbotClient({
+      apiId: parseInt(process.env.TELEGRAM_API_ID),
+      apiHash: process.env.TELEGRAM_API_HASH,
+      stringSession: process.env.TELEGRAM_STRING_SESSION,
+    });
+    console.log("[Userbot] 暗网数据泵已上线，全量历史抓取功能就绪。");
+  } catch (err) {
+    console.error("[Userbot] 启动失败，将回退至本地存储模式:", err);
+  }
+}
+
 const agent = AGENT_ENCLAVE_TARGET
   ? null
   : createOpenAIAgent({
@@ -128,6 +145,7 @@ if (OWNER_USER_ID) {
 
 const runtime = createClientRuntime({
   enclaveClient,
+  userbot,
 });
 const gateway = createMessageGateway({
   telegram,
