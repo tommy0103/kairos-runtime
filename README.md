@@ -1,7 +1,9 @@
 # [Project Name]
 
 > An agent runtime that treats context, execution, and permissions as OS primitives — not LLM problems.
+
 > Like light — particle and wave, yet neither classical.  
+
 > OS primitives. Agent-centered. Neither, in the classical sense.
 
 My friend's framework was querying 100k tokens per request. Every message. Every time. I thought there had to be a better way.
