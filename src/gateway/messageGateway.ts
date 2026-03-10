@@ -7,6 +7,7 @@ import type {
   TriggerDecision,
 } from "./types";
 import type { UserRolesStore } from "../storage";
+import { createEventNormalizer } from "./eventNormalizer";
 
 const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
@@ -15,6 +16,7 @@ export interface CreateMessageGatewayOptions {
   runtime: ClientRuntime;
   policies: GatewayTriggerPolicy[];
   userRoles?: UserRolesStore;
+  mergeWindowMs?: number;
 }
 
 export interface MessageGateway {
@@ -33,26 +35,24 @@ export function createMessageGateway(
     (a, b) => a.priority - b.priority
   );
 
-  const unsubscribe = options.telegram.onMessage((message) => {
-    void handleMessage(message).catch((error) => {
-      console.error("message gateway handler failed:", error);
-    });
-  });
-
-  const handleMessage = async (message: TelegramMessage) => {
-    console.log("handleMessage", message);
+  const recordNormalizedMessage = async (message: TelegramMessage) => {
     await options.runtime.recordMessage(message);
+  };
+
+  const handleTriggerMessage = async (
+    message: TelegramMessage,
+    decision: TriggerDecision
+  ) => {
+    console.log("handleMessage", message);
 
     // blocked users get recorded but never trigger agent
     if (options.userRoles?.isBlocked(message.userId)) {
-      const wouldTrigger = await pickDecision(policies, message, context);
-      if (wouldTrigger.shouldTrigger) {
+      if (decision.shouldTrigger) {
         await options.telegram.reply(message.chatId, BLOCKED_REPLY, message.messageId);
       }
       return;
     }
 
-    const decision = await pickDecision(policies, message, context);
     if (!decision.shouldTrigger || !decision.prompt) {
       return;
     }
@@ -99,8 +99,48 @@ export function createMessageGateway(
     }
   };
 
+  const normalizer = createEventNormalizer({
+    mergeWindowMs: options.mergeWindowMs,
+    onUpsert: (message) => {
+      return recordNormalizedMessage(message);
+    },
+  });
+
+  const unsubscribe = options.telegram.onMessage((rawMessage) => {
+    normalizer.ingestMessage(rawMessage);
+
+    void (async () => {
+      const decision = await pickDecision(policies, rawMessage, context);
+      if (!decision.shouldTrigger || !decision.prompt) {
+        return;
+      }
+
+      const flushed = normalizer.flushChatBefore(rawMessage.chatId, rawMessage.timestamp);
+      // console.log("flushed", flushed);
+      for (const message of flushed) {
+        await recordNormalizedMessage(message);
+      }
+
+      const triggerMessage =
+        flushed.find((message) => message.messageId === rawMessage.messageId) ?? rawMessage;
+      if (!flushed.some((message) => message.messageId === triggerMessage.messageId)) {
+        await recordNormalizedMessage(triggerMessage);
+      }
+      await handleTriggerMessage(triggerMessage, decision);
+    })().catch((error) => {
+      console.error("message gateway handler failed:", error);
+    });
+  });
+  const unsubscribeEdited = options.telegram.onEditedMessage((editedMessage) => {
+    normalizer.ingestEditedMessage(editedMessage);
+  });
+
   return {
-    stop: () => unsubscribe(),
+    stop: () => {
+      unsubscribe();
+      unsubscribeEdited();
+      normalizer.stop();
+    },
   };
 }
 

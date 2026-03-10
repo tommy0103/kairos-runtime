@@ -28,6 +28,9 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   const messageHandlers = new Set<
     (message: TelegramMessage) => void | Promise<void>
   >();
+  const editedMessageHandlers = new Set<
+    (message: TelegramMessage) => void | Promise<void>
+  >();
   const sendMessage = (
     chatId: number,
     text: string,
@@ -47,6 +50,14 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     for (const handler of messageHandlers) {
       void Promise.resolve(handler(message)).catch((error) => {
         console.error("telegram onMessage handler failed:", error);
+      });
+    }
+  };
+
+  const dispatchEditedMessage = (message: TelegramMessage) => {
+    for (const handler of editedMessageHandlers) {
+      void Promise.resolve(handler(message)).catch((error) => {
+        console.error("telegram onEditedMessage handler failed:", error);
       });
     }
   };
@@ -131,6 +142,13 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     };
   };
 
+  const onEditedMessage: TelegramAdapter["onEditedMessage"] = (handler) => {
+    editedMessageHandlers.add(handler);
+    return () => {
+      editedMessageHandlers.delete(handler);
+    };
+  };
+
   const flushMediaGroup = (key: string) => {
     const pending = pendingMediaGroups.get(key);
     if (!pending) {
@@ -206,6 +224,15 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     await next();
   });
 
+  bot.on("edited_message", async (ctx, next) => {
+    const message = toEditedTelegramMessage(ctx);
+    if (!message) {
+      return;
+    }
+    dispatchEditedMessage(message);
+    await next();
+  });
+
   return {
     start: async () => {
       await bot.start();
@@ -219,6 +246,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     },
     getMessages: () => [...messages],
     onMessage,
+    onEditedMessage,
     reply,
     startStream,
     appendStream,
@@ -254,6 +282,40 @@ function toTelegramMessage(ctx: Context, photoCountOverride?: number): TelegramM
       isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
       isMentionMe: isMentionMe(ctx),
       mentions: extractMentions(message),
+    },
+  };
+}
+
+function toEditedTelegramMessage(ctx: Context): TelegramMessage | null {
+  const chat = ctx.chat;
+  const message = ctx.editedMessage;
+  if (!chat || !message) {
+    return null;
+  }
+
+  const context = "text" in message ? (message.text ?? "") : (message.caption ?? "");
+  const stickerEmoji = message.sticker?.emoji ?? "";
+  const photoCount = (message.photo?.length ?? 0) > 0 ? 1 : 0;
+  const photoPlaceholder = photoCount <= 0 ? "" : "[photo]";
+
+  return {
+    userId: message.from?.id?.toString() ?? "unknown",
+    messageId: message.message_id,
+    chatId: chat.id,
+    conversationType: toConversationType(chat.type),
+    context: `${stickerEmoji}${context}${photoPlaceholder}`,
+    timestamp: (message.date ?? Math.floor(Date.now() / 1000)) * 1000,
+    metadata: {
+      isBot: message.from?.is_bot ?? false,
+      username: message.from?.username ?? message.from?.first_name ?? null,
+      replyToMessageId: message.reply_to_message?.message_id ?? null,
+      replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
+      isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
+      isMentionMe: isMentionMeEdited(ctx),
+      mentions: extractMentionsFromTextWithEntities(
+        "text" in message ? (message.text ?? "") : "",
+        message.entities
+      ),
     },
   };
 }
@@ -362,14 +424,29 @@ function isMentionMe(ctx: Context): boolean {
     return text.includes(`@${ctx.me.username}`);
 }
 
+function isMentionMeEdited(ctx: Context): boolean {
+  const message = ctx.editedMessage;
+  if (!message) {
+    return false;
+  }
+  const text = "text" in message ? (message.text ?? "") : "";
+  return text.includes(`@${ctx.me.username}`);
+}
+
 function extractMentions(message: NonNullable<Context["message"]>): string[] {
   const text = "text" in message ? (message.text ?? "") : "";
-  if (!text || !message.entities?.length) {
+  return extractMentionsFromTextWithEntities(text, message.entities);
+}
+
+function extractMentionsFromTextWithEntities(
+  text: string,
+  entities?: ReadonlyArray<{ type: string; offset: number; length: number }>
+): string[] {
+  if (!text || !entities?.length) {
     return [];
   }
-
   const mentions: string[] = [];
-  for (const entity of message.entities) {
+  for (const entity of entities) {
     if (entity.type !== "mention") {
       continue;
     }

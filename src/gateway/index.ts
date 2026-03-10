@@ -1,4 +1,5 @@
 export * from "./messageGateway";
+export * from "./eventNormalizer";
 export * from "./clientRuntime";
 export * from "./context";
 export * from "./types";
