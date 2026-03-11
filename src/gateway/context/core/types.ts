@@ -1,5 +1,5 @@
-import type { LLMMessage } from "../../types/message";
-import type { TelegramMessage } from "../../types/message";
+import type { LLMMessage } from "../../../types/message";
+import type { TelegramMessage } from "../../../types/message";
 
 export interface MessageNode {
   message: TelegramMessage;

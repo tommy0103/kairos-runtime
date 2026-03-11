@@ -1,5 +1,5 @@
 import { escapeXml, formatMessageNode, formatTimestampUtc8, getSpeaker } from "../../utils/messageXml";
-import type { ContextAssembler } from "./types";
+import type { ContextAssembler } from "./core/types";
 
 export function createContextAssembler(): ContextAssembler {
   return {

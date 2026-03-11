@@ -3,7 +3,6 @@
 > An agent runtime that treats context, execution, and permissions as OS primitives — not LLM problems.
 
 > Like light — particle and wave, yet neither classical.  
-
 > OS primitives. Agent-centered. Neither, in the classical sense.
 
 My friend's framework was querying 100k tokens per request. Every message. Every time. I thought there had to be a better way.
@@ -44,7 +43,7 @@ Sessions are organized in three layers:
 
 A session activates when one of its messages receives a reply. Layers promote and demote via LRU. When no in-memory session matches an incoming message, the runtime fetches from L2 — a page fault, in OS terms.
 
-> ⚠️ L0/L1 memory layer and L2 archival is implemented. L2 retrieval is in progress.
+> ⚠️ L0/L1 memory layer and L2 archival and retreival is implemented. 
 
 ### Execution Layer — Sandboxed, recoverable, self-evolving
 
@@ -75,7 +74,7 @@ This project is in early development. The memory layer (L0/L1) is the most compl
 |-----------|--------|
 | L0/L1 session clustering | ✅ Implemented |
 | L2 archival (OpenViking alike VFS) | ✅ Implemented |
-| L2 retrieval (OpenViking alike VFS) | 🚧 In progress |
+| L2 retrieval (OpenViking alike VFS) | ✅ Implemented |
 | containerd sandbox | 🚧 In progress |
 | CRIU checkpoint/rollback | ⚠️ Experimental(In progress) |
 | evolute (self-writing tools) | ⚠️ Experimental(Implemented) |

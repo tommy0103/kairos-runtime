@@ -10,6 +10,45 @@ import type { CallContext, CallOptions } from "nice-grpc-common";
 
 export const protobufPackage = "kairos.vfs.v1";
 
+export enum SearchMode {
+  SEARCH_MODE_UNSPECIFIED = 0,
+  SEARCH_MODE_SEMANTIC = 1,
+  SEARCH_MODE_EXACT = 2,
+  UNRECOGNIZED = -1,
+}
+
+export function searchModeFromJSON(object: any): SearchMode {
+  switch (object) {
+    case 0:
+    case "SEARCH_MODE_UNSPECIFIED":
+      return SearchMode.SEARCH_MODE_UNSPECIFIED;
+    case 1:
+    case "SEARCH_MODE_SEMANTIC":
+      return SearchMode.SEARCH_MODE_SEMANTIC;
+    case 2:
+    case "SEARCH_MODE_EXACT":
+      return SearchMode.SEARCH_MODE_EXACT;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return SearchMode.UNRECOGNIZED;
+  }
+}
+
+export function searchModeToJSON(object: SearchMode): string {
+  switch (object) {
+    case SearchMode.SEARCH_MODE_UNSPECIFIED:
+      return "SEARCH_MODE_UNSPECIFIED";
+    case SearchMode.SEARCH_MODE_SEMANTIC:
+      return "SEARCH_MODE_SEMANTIC";
+    case SearchMode.SEARCH_MODE_EXACT:
+      return "SEARCH_MODE_EXACT";
+    case SearchMode.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 export interface ReadRequest {
   path: string;
 }
@@ -44,6 +83,7 @@ export interface SearchRequest {
   query: string;
   scope: string;
   limit: number;
+  mode: SearchMode;
 }
 
 export interface SearchResponse {
@@ -79,6 +119,7 @@ export interface ChatMessage {
   context: string;
   timestamp: number;
   metadata: MessageMetadata | undefined;
+  vector: number[];
 }
 
 export interface MessageMetadata {
@@ -562,7 +603,7 @@ export const PatchResponse: MessageFns<PatchResponse> = {
 };
 
 function createBaseSearchRequest(): SearchRequest {
-  return { query: "", scope: "", limit: 0 };
+  return { query: "", scope: "", limit: 0, mode: 0 };
 }
 
 export const SearchRequest: MessageFns<SearchRequest> = {
@@ -575,6 +616,9 @@ export const SearchRequest: MessageFns<SearchRequest> = {
     }
     if (message.limit !== 0) {
       writer.uint32(24).int32(message.limit);
+    }
+    if (message.mode !== 0) {
+      writer.uint32(32).int32(message.mode);
     }
     return writer;
   },
@@ -610,6 +654,14 @@ export const SearchRequest: MessageFns<SearchRequest> = {
           message.limit = reader.int32();
           continue;
         }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.mode = reader.int32() as any;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -624,6 +676,7 @@ export const SearchRequest: MessageFns<SearchRequest> = {
       query: isSet(object.query) ? globalThis.String(object.query) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
+      mode: isSet(object.mode) ? searchModeFromJSON(object.mode) : 0,
     };
   },
 
@@ -638,6 +691,9 @@ export const SearchRequest: MessageFns<SearchRequest> = {
     if (message.limit !== 0) {
       obj.limit = Math.round(message.limit);
     }
+    if (message.mode !== 0) {
+      obj.mode = searchModeToJSON(message.mode);
+    }
     return obj;
   },
 
@@ -649,6 +705,7 @@ export const SearchRequest: MessageFns<SearchRequest> = {
     message.query = object.query ?? "";
     message.scope = object.scope ?? "";
     message.limit = object.limit ?? 0;
+    message.mode = object.mode ?? 0;
     return message;
   },
 };
@@ -1108,6 +1165,7 @@ function createBaseChatMessage(): ChatMessage {
     context: "",
     timestamp: 0,
     metadata: undefined,
+    vector: [],
   };
 }
 
@@ -1134,6 +1192,11 @@ export const ChatMessage: MessageFns<ChatMessage> = {
     if (message.metadata !== undefined) {
       MessageMetadata.encode(message.metadata, writer.uint32(58).fork()).join();
     }
+    writer.uint32(66).fork();
+    for (const v of message.vector) {
+      writer.float(v);
+    }
+    writer.join();
     return writer;
   },
 
@@ -1200,6 +1263,24 @@ export const ChatMessage: MessageFns<ChatMessage> = {
           message.metadata = MessageMetadata.decode(reader, reader.uint32());
           continue;
         }
+        case 8: {
+          if (tag === 69) {
+            message.vector.push(reader.float());
+
+            continue;
+          }
+
+          if (tag === 66) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.vector.push(reader.float());
+            }
+
+            continue;
+          }
+
+          break;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1234,6 +1315,9 @@ export const ChatMessage: MessageFns<ChatMessage> = {
       context: isSet(object.context) ? globalThis.String(object.context) : "",
       timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
       metadata: isSet(object.metadata) ? MessageMetadata.fromJSON(object.metadata) : undefined,
+      vector: globalThis.Array.isArray(object?.vector)
+        ? object.vector.map((e: any) => globalThis.Number(e))
+        : [],
     };
   },
 
@@ -1260,6 +1344,9 @@ export const ChatMessage: MessageFns<ChatMessage> = {
     if (message.metadata !== undefined) {
       obj.metadata = MessageMetadata.toJSON(message.metadata);
     }
+    if (message.vector?.length) {
+      obj.vector = message.vector;
+    }
     return obj;
   },
 
@@ -1277,6 +1364,7 @@ export const ChatMessage: MessageFns<ChatMessage> = {
     message.metadata = (object.metadata !== undefined && object.metadata !== null)
       ? MessageMetadata.fromPartial(object.metadata)
       : undefined;
+    message.vector = object.vector?.map((e) => e) || [];
     return message;
   },
 };

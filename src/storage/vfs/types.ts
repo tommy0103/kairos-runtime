@@ -10,6 +10,7 @@ export type {
   SearchRequest,
   SearchResponse,
   SearchResult,
+  SearchMode,
   WriteRequest,
   WriteResponse,
 } from "./generated/vfs";

@@ -1,4 +1,5 @@
 export { MemoryVfsClient, createMemoryVfsClient, type CreateMemoryVfsClientOptions } from "./client";
+export { SearchMode } from "./generated/vfs";
 export type {
   ArchiveRequest,
   ArchiveResponse,

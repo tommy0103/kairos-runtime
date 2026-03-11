@@ -1,13 +1,15 @@
-import { createDenseEmbedder, type DenseEmbedder } from "../../model/embedding";
-import type { CloudModel, LocalModel } from "../../model/llm";
-import type { TelegramMessage } from "../../types/message";
-import { createArchiverService } from "../../archiver";
+import { createDenseEmbedder, type DenseEmbedder } from "../../../model/embedding";
+import type { CloudModel, LocalModel } from "../../../model/llm";
+import type { TelegramMessage } from "../../../types/message";
+import { createArchiverService } from "../archiver";
+import { createContextSearcher } from "../searcher";
 import {
   decideSessionByLlm,
   decideSessionByReranker,
   type SessionDeciderResult,
   type SessionSummary,
-} from "./sessionDecider";
+} from "../decider/sessionDecider";
+import type { SearchResult } from "../../../storage/vfs";
 import type {
   ChatControlBlock,
   ContextStore,
@@ -42,7 +44,8 @@ const MEDIUM_MESSAGE_LENGTH = 8;
 const SHORT_MESSAGE_LENGTH = 4;
 const RECENT_SESSIONS_COUNT = 5;
 const RECENT_CHAT_MESSAGES_COUNT = 10;
-const SESSION_LRU_EXPIRE_MS = 10 * 60 * 1000;
+// const SESSION_LRU_EXPIRE_MS = 10 * 60 * 1000;
+const SESSION_LRU_EXPIRE_MS = 1 * 60 * 1000;
 const TOPIC_SUMMARY_CONCAT_MAX = 3;
 const TOPIC_SUMMARY_CLOUD_BATCH = 5;
 const IMPOSSIBLE_SIMILARITY_SCORE_THRESHOLD = 0.35;
@@ -66,6 +69,7 @@ export function createInMemoryContextStore(
   const localModel = options.localModel;
   const cloudModel = options.cloudModel;
   const archiverService = createArchiverService({ cloudModel });
+  const contextSearcher = createContextSearcher();
 
   return {
     ingestMessage: async ({ message }) => {
@@ -75,7 +79,7 @@ export function createInMemoryContextStore(
       const messageId = message.messageId;
       const isShortMessage = message.context.length <= SHORT_MESSAGE_LENGTH;
       const ccb = getOrCreateChatControlBlock(chatControlBlocks, chatId);
-      downgradeExpiredSessions(ccb, now, SESSION_LRU_EXPIRE_MS, archiverService);
+      await downgradeExpiredSessions(ccb, now, SESSION_LRU_EXPIRE_MS, archiverService);
       const existing = ccb.messageNodes.get(messageId);
       if (existing) {
         existing.message = message;
@@ -148,8 +152,33 @@ export function createInMemoryContextStore(
       }
 
       if (!targetSession) {
-        // evictOldestSessionIfNeeded(ccb, maxSessionsPerChat); // TODO: 需要修改
-        targetSession = createSession(ccb, node, now, isShortMessage);
+        try {
+          if (message.metadata.replyToMessageId !== null) {
+            const searchExactResult = await contextSearcher.searchByMessageId({
+              chatId,
+              messageId: message.metadata.replyToMessageId,
+            });
+            if (searchExactResult) {
+              targetSession = recallSession(ccb, searchExactResult, now);
+            }
+          }
+          if (!targetSession) {
+            const searchSemanticResults = await contextSearcher.searchSemantic({
+              chatId,
+              query: message.context,
+              limit: 1,
+            });
+            const mostSimilarResult = searchSemanticResults[0];
+            if (mostSimilarResult && mostSimilarResult.score >= similarityThreshold) {
+              targetSession = recallSession(ccb, mostSimilarResult, now);
+            }
+          }
+        } catch (error) {
+          console.error("context search recall failed", error);
+        }
+        if (!targetSession) {
+          targetSession = createSession(ccb, node, now, isShortMessage);
+        }
       }
 
       node.sessionId = targetSession.sessionId;
@@ -347,13 +376,17 @@ async function archiveSession(
     chatId: number;
     centerVector: number[];
     topicSummary: string;
-    messages: TelegramMessage[];
+    messages: Array<{ message: TelegramMessage; vector: number[] }>;
   }) => Promise<void> }
 ): Promise<void> {
   const sortedMessages = Array.from(session.messageIds)
-    .map((id) => ccb.messageNodes.get(id)?.message ?? null)
-    .filter((message): message is TelegramMessage => Boolean(message))
-    .sort((a, b) => a.timestamp - b.timestamp);
+    .map((id) => ccb.messageNodes.get(id) ?? null)
+    .filter((node): node is MessageNode => Boolean(node))
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map((node) => ({
+      message: node.message,
+      vector: node.vector.slice(),
+    }));
 
   await archiverService.runBackgroundArchive({
     sessionId: session.sessionId,
@@ -382,7 +415,7 @@ async function downgradeExpiredSessions(
     chatId: number;
     centerVector: number[];
     topicSummary: string;
-    messages: TelegramMessage[];
+    messages: Array<{ message: TelegramMessage; vector: number[] }>;
   }) => Promise<void> }
 ): Promise<void> {
   for (const session of ccb.sessionControlBlocks.values()) {
@@ -566,6 +599,101 @@ function createSession(
   return session;
 }
 
+function createSessionFromSearchResult(searchResult: SearchResult, now: number): SessionControlBlock {
+  return {
+    sessionId: searchResult.sessionId,
+    topicSummary: searchResult.abstractSummary,
+    lastSummarizedMessageCount: 0,
+    centerVector: searchResult.centerVector.slice(),
+    recentVector: searchResult.centerVector.slice(),
+    messageIds: new Set<number>(),
+    rootMessageIds: new Set(),
+    status: "L1_ACTIVE",
+    lastActiveTime: now,
+  };
+}
+
+function recallSession(ccb: ChatControlBlock, searchResult: SearchResult, now: number) {
+  const session = createSessionFromSearchResult(searchResult, now);
+  ccb.sessionControlBlocks.set(session.sessionId, session);
+  const recalledNodes: MessageNode[] = [];
+  for (const storedMessage of searchResult.messages) {
+    const recalledMessage = toTelegramMessage(storedMessage);
+    if (!recalledMessage) {
+      continue;
+    }
+    const recalledNode: MessageNode = {
+      message: recalledMessage,
+      messageId: recalledMessage.messageId,
+      timestamp: recalledMessage.timestamp,
+      replyToId: recalledMessage.metadata.replyToMessageId,
+      childrenIds: [],
+      sessionId: session.sessionId,
+      vector: storedMessage.vector.length > 0 ? storedMessage.vector.slice() : session.centerVector.slice(),
+    };
+    recalledNodes.push(recalledNode);
+  }
+  recalledNodes.sort((a, b) => a.timestamp - b.timestamp);
+  for (const recalledNode of recalledNodes) {
+    ccb.messageNodes.set(recalledNode.messageId, recalledNode);
+    session.messageIds.add(recalledNode.messageId);
+  }
+  for (const recalledNode of recalledNodes) {
+    const parentId = recalledNode.replyToId;
+    if (parentId !== null && session.messageIds.has(parentId)) {
+      const parent = ccb.messageNodes.get(parentId);
+      if (parent) {
+        parent.childrenIds.push(recalledNode.messageId);
+        continue;
+      }
+    }
+    recalledNode.replyToId = null;
+    session.rootMessageIds.add(recalledNode.messageId);
+  }
+  for (const recalledNode of recalledNodes) {
+    updateLastMessageNodeId(ccb, recalledNode);
+  }
+  return session;
+}
+
+function toTelegramMessage(stored: SearchResult["messages"][number]): TelegramMessage | null {
+  const messageId = Number(stored.messageId);
+  const chatId = Number(stored.chatId);
+  const timestamp = Number(stored.timestamp);
+  if (!Number.isFinite(messageId) || !Number.isFinite(chatId) || !Number.isFinite(timestamp)) {
+    return null;
+  }
+  const rawConversationType = stored.conversationType;
+  const conversationType =
+    rawConversationType === "private" ||
+    rawConversationType === "group" ||
+    rawConversationType === "supergroup" ||
+    rawConversationType === "channel"
+      ? rawConversationType
+      : "supergroup";
+  const metadata = stored.metadata;
+  const replyToMessageIdRaw = metadata?.replyToMessageId ?? "";
+  const replyToMessageIdNum = Number(replyToMessageIdRaw);
+  const replyToMessageId = Number.isFinite(replyToMessageIdNum) ? replyToMessageIdNum : null;
+  return {
+    userId: stored.userId,
+    messageId,
+    chatId,
+    conversationType,
+    context: stored.context,
+    timestamp,
+    metadata: {
+      isBot: metadata?.isBot ?? false,
+      username: metadata?.username ? metadata.username : null,
+      replyToMessageId,
+      replyToUserId: metadata?.replyToUserId ? metadata.replyToUserId : null,
+      isReplyToMe: metadata?.isReplyToMe ?? false,
+      isMentionMe: metadata?.isMentionMe ?? false,
+      mentions: metadata?.mentions ?? [],
+    },
+  };
+}
+
 function setSessionActive(ccb: ChatControlBlock, activeSessionId: string): void {
   // for (const session of ccb.sessionControlBlocks.values()) {
   //   session.status = session.sessionId === activeSessionId ? "L1_ACTIVE" : "L2_BACKGROUND";
@@ -652,7 +780,6 @@ Output only the new topic summary, no explanation:`;
   session.topicSummary = text.trim().slice(0, 80) || session.topicSummary;
   session.lastSummarizedMessageCount = from + TOPIC_SUMMARY_CLOUD_BATCH;
 }
-
 // function evictOldestSessionIfNeeded(ccb: ChatControlBlock, maxSessionsPerChat: number): void {
 //   if (ccb.sessionControlBlocks.size < maxSessionsPerChat) {
 //     return;

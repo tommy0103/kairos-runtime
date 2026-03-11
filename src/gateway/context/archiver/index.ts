@@ -1,6 +1,6 @@
-import type { CloudModel } from "../model/llm";
-import type { TelegramMessage } from "../types/message";
-import { createMemoryVfsClient, type ChatMessage, type MessageMetadata } from "../storage/vfs";
+import type { CloudModel } from "../../../model/llm";
+import type { TelegramMessage } from "../../../types/message";
+import { createMemoryVfsClient, type ChatMessage, type MessageMetadata } from "../../../storage/vfs";
 import { createArchiveAssembler } from "./assembler";
 import { ARCHIVER_SYSTEM_PROMPT } from "./prompt";
 
@@ -17,7 +17,10 @@ export interface BackgroundArchiveSession {
   chatId: number;
   centerVector: number[];
   topicSummary: string;
-  messages: TelegramMessage[];
+  messages: Array<{
+    message: TelegramMessage;
+    vector: number[];
+  }>;
 }
 
 export interface ArchiverService {
@@ -40,7 +43,7 @@ export function createArchiverService(options: CreateArchiverServiceOptions = {}
         chatId: String(session.chatId),
         centroidVector: session.centerVector,
         abstractSummary: session.topicSummary,
-        messages: session.messages.map(toVfsChatMessage),
+        messages: session.messages.map((item) => toVfsChatMessage(item.message, item.vector)),
       });
 
       if (!cloudModel || session.messages.length === 0) {
@@ -48,7 +51,7 @@ export function createArchiverService(options: CreateArchiverServiceOptions = {}
       }
 
       const llmMessages = assembler.build({
-        sessionMessages: session.messages,
+        sessionMessages: session.messages.map((item) => item.message),
         sessionId: session.sessionId,
         systemPrompt: ARCHIVER_SYSTEM_PROMPT,
       });
@@ -68,7 +71,7 @@ export function createArchiverService(options: CreateArchiverServiceOptions = {}
   };
 }
 
-function toVfsChatMessage(message: TelegramMessage): ChatMessage {
+function toVfsChatMessage(message: TelegramMessage, vector: number[]): ChatMessage {
   return {
     userId: message.userId,
     messageId: String(message.messageId),
@@ -85,6 +88,7 @@ function toVfsChatMessage(message: TelegramMessage): ChatMessage {
       isMentionMe: message.metadata.isMentionMe,
       mentions: message.metadata.mentions,
     } as MessageMetadata,
+    vector: vector.slice(),
   };
 }
 

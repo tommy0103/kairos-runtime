@@ -1,5 +1,5 @@
-import type { LLMMessage, TelegramMessage } from "../types/message";
-import { escapeXml, formatTimestampUtc8 } from "../utils/messageXml";
+import type { LLMMessage, TelegramMessage } from "../../../types/message";
+import { escapeXml, formatTimestampUtc8 } from "../../../utils/messageXml";
 
 export interface ArchiveAssemblerBuildInput {
   sessionMessages: TelegramMessage[];
