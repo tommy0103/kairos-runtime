@@ -34,7 +34,11 @@ export function createEventNormalizer(
 
   const emitUpsert = (message: TelegramMessage) => {
     void Promise.resolve(options.onUpsert(message)).catch((error) => {
-      console.error("event normalizer onUpsert failed:", error);
+      const tag = isTimeoutError(error) ? "[timeout]" : "[error]";
+      console.error(
+        `event normalizer onUpsert failed ${tag} chatId=${message.chatId} messageId=${message.messageId} userId=${message.userId}`,
+        error
+      );
     });
   };
 
@@ -259,4 +263,18 @@ function buildMergedMessage(messages: TelegramMessage[]): TelegramMessage {
       mentions: mergedMentions,
     },
   };
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const maybeDom = error as { name?: unknown; message?: unknown; code?: unknown };
+  if (maybeDom.name === "TimeoutError") {
+    return true;
+  }
+  if (typeof maybeDom.message === "string" && maybeDom.message.toLowerCase().includes("timed out")) {
+    return true;
+  }
+  return maybeDom.code === 23;
 }

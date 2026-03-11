@@ -36,7 +36,15 @@ export function createMessageGateway(
   );
 
   const recordNormalizedMessage = async (message: TelegramMessage) => {
-    await options.runtime.recordMessage(message);
+    try {
+      await options.runtime.recordMessage(message);
+    } catch (error) {
+      console.error(
+        `message gateway recordMessage failed chatId=${message.chatId} messageId=${message.messageId} userId=${message.userId}`,
+        error
+      );
+      throw error;
+    }
   };
 
   const handleTriggerMessage = async (
