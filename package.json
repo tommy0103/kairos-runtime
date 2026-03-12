@@ -15,28 +15,6 @@
     "proto:gen:vfs": "grpc_tools_node_protoc --plugin=protoc-gen-ts_proto=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=src/storage/vfs/generated --ts_proto_opt=esModuleInterop=true,env=node,forceLong=number,useExactTypes=false,outputServices=nice-grpc,outputServices=generic-definitions -I src/vfs/proto src/vfs/proto/vfs.proto",
     "proto:gen": "bun run proto:gen:vfs"
   },
-  "dependencies": {
-    "@bufbuild/protobuf": "^2.11.0",
-    "@grpc/grpc-js": "^1.14.3",
-    "@grpc/proto-loader": "^0.8.0",
-    "@mariozechner/pi-agent-core": "^0.54.0",
-    "@mariozechner/pi-ai": "^0.54.0",
-    "@sinclair/typebox": "^0.34.48",
-    "@steipete/bird": "^0.8.0",
-    "NeteaseCloudMusicApi": "^4.29.0",
-    "asciichart": "^1.5.25",
-    "cheerio": "^1.2.0",
-    "elysia": "latest",
-    "es-module-lexer": "^2.0.0",
-    "grammy": "^1.40.0",
-    "hyparquet": "^1.25.1",
-    "mathjs": "^15.1.1",
-    "nice-grpc": "^2.1.14",
-    "openai": "^6.22.0",
-    "playwright": "^1.58.2",
-    "protobufjs": "^8.0.0",
-    "typescript": "^5.9.3"
-  },
   "devDependencies": {
     "bun-types": "latest",
     "concurrently": "^9.2.1",

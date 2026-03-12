@@ -6,6 +6,22 @@
     "dev": "MEMORY_FILES_ROOT=${MEMORY_FILES_ROOT:-../.runtime/memory_files} EVOLUTIONS_ROOT=${EVOLUTIONS_ROOT:-../.runtime/evolutions} bun run --watch ./main.ts"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/proto-loader": "^0.8.0",
+    "@mariozechner/pi-agent-core": "^0.54.0",
+    "@mariozechner/pi-ai": "^0.54.0",
+    "@sinclair/typebox": "^0.34.48",
+    "NeteaseCloudMusicApi": "^4.29.0",
+    "asciichart": "^1.5.25",
+    "cheerio": "^1.2.0",
+    "elysia": "latest",
+    "es-module-lexer": "^2.0.0",
+    "hyparquet": "^1.25.1",
+    "mathjs": "^15.1.1",
+    "openai": "^6.22.0",
+    "playwright": "^1.58.2",
+    "protobufjs": "^8.0.0",
+    "typescript": "^5.9.3",
     "zod": "^4.3.6"
   }
 }

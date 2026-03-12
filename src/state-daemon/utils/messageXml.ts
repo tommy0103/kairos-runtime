@@ -16,7 +16,7 @@ export function getSpeaker(message: { metadata: { username: string | null } }): 
 }
 
 export function formatTimestampUtc8(timestamp: number): string {
-  return new Date(timestamp + 8 * 60 * 60 * 1000).toLocaleString("en-US", { timeZone: "Asia/Shanghai" });
+  return new Date(timestamp).toLocaleString("en-US", { timeZone: "Asia/Shanghai" });
 }
 
 export function escapeXml(input: string): string {
