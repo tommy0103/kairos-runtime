@@ -4,20 +4,20 @@ import { fileURLToPath } from "node:url";
 import { quote } from "./utils";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
+// from src/state-daemon/gateway/context/prompt, ../../../../ = src/
 const SHARED_MEMORY_DIR = resolve(CURRENT_DIR, "../../../../.runtime/memory_files");
-const LEGACY_MEMORY_DIR = resolve(CURRENT_DIR, "../../../../enclave-runtime/agent/memory_files");
 
 function resolveMemoryDir(): string {
   return process.env.MEMORY_FILES_ROOT?.trim() || SHARED_MEMORY_DIR;
 }
 
 function readMemoryFile(fileName: string): string {
-  const memoryDir = resolveMemoryDir();
+  const filePath = resolve(resolveMemoryDir(), fileName);
   try {
-    console.log("memoryDir", memoryDir);
-    return readFileSync(resolve(memoryDir, fileName), "utf8");
+    return readFileSync(filePath, "utf8");
   } catch {
-    return readFileSync(resolve(LEGACY_MEMORY_DIR, fileName), "utf8");
+    console.warn(`[system] memory file not found, skipping: ${filePath}`);
+    return "";
   }
 }
 

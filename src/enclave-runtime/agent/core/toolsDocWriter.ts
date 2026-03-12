@@ -4,7 +4,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
-const SHARED_MEMORY_DIR = resolve(CURRENT_DIR, "../../../../.runtime/memory_files");
+// from src/enclave-runtime/agent/core, ../../../ = src/
+const SHARED_MEMORY_DIR = resolve(CURRENT_DIR, "../../../.runtime/memory_files");
 const DEFAULT_MEMORY_DIR = process.env.MEMORY_FILES_ROOT?.trim() || SHARED_MEMORY_DIR;
 export const DEFAULT_TOOLS_MEMORY_FILE = resolve(DEFAULT_MEMORY_DIR, "Tools.md");
 
