@@ -63,7 +63,7 @@ export function createArchiverService(options: CreateArchiverServiceOptions = {}
 
       for (const patch of patches) {
         await vfsClient.patch({
-          path: `mem://users/${patch.user_id}/${patch.file}.json`,
+          path: `logos://users/${patch.user_id}/${patch.file}.json`,
           partialContent: JSON.stringify(patch.content),
         });
       }
