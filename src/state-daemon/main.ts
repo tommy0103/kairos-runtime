@@ -5,12 +5,11 @@ import {
   createReplyToMeTriggerPolicy,
 } from "./gateway";
 import { loadStateDaemonConfig } from "@kairos-runtime/app-config";
-import { createTelegramAdapter } from "./telegram/adapter";
+import { createAdapter, type TelegramConfig } from "./telegram";
 import { createUserRolesStore } from "./storage";
 import { createGrpcEnclaveClient } from "./enclave/client";
 
 const config = loadStateDaemonConfig();
-const BOT_TOKEN = config.telegram.botToken;
 const AGENT_ENCLAVE_TARGET = config.grpc.enclaveTarget;
 const OWNER_USER_ID = config.telegram.ownerUserId;
 
@@ -23,11 +22,15 @@ process.env.OLLAMA_EMBED_MODEL ??= config.model.embedding.ollamaModel;
 process.env.EMBED_PROVIDER ??= config.model.embedding.provider;
 process.env.ARK_API_KEY ??= config.model.llm.cloud.apiKey;
 
-if (!BOT_TOKEN) {
+if (config.telegram.mode === "bot" && !config.telegram.botToken) {
   throw new Error("BOT_TOKEN is required to start telegram bot.");
 }
 
-const telegram = createTelegramAdapter(BOT_TOKEN);
+if (config.telegram.mode === "userbot" && !config.telegram.userbot) {
+  throw new Error("UserBot configuration is required for userbot mode.");
+}
+
+const telegram = createAdapter(config.telegram as TelegramConfig);
 const enclaveClient = createGrpcEnclaveClient({
   target: AGENT_ENCLAVE_TARGET,
 });

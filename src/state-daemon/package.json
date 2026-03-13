@@ -11,6 +11,8 @@
     "@grpc/grpc-js": "^1.14.3",
     "@grpc/proto-loader": "^0.8.0",
     "grammy": "^1.40.0",
-    "nice-grpc": "^2.1.14"
+    "nice-grpc": "^2.1.14",
+    "telegram": "^2.26.16",
+    "input": "^1.0.1"
   }
 }

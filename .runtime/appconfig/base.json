@@ -25,8 +25,15 @@
         "vfsTarget": "/tmp/kairos-runtime-vfs.sock"
       },
       "telegram": {
+        "mode": "${ENV:TELEGRAM_MODE:-bot}",
         "botToken": "${ENV:BOT_TOKEN}",
-        "ownerUserId": ""
+        "userbot": {
+          "apiId": "${ENV:TELEGRAM_API_ID}",
+          "apiHash": "${ENV:TELEGRAM_API_HASH}",
+          "phoneNumber": "${ENV:TELEGRAM_PHONE}",
+          "password": "${ENV:TELEGRAM_PASSWORD:-}"
+        },
+        "ownerUserId": "${ENV:OWNER_USER_ID}"
       },
       "model": {
         "llm": {

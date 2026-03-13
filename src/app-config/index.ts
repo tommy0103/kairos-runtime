@@ -28,6 +28,14 @@ interface EnclaveRuntimeConfig {
   };
 }
 
+interface UserBotConfig {
+  apiId: number;
+  apiHash: string;
+  phoneNumber: string;
+  password?: string;
+  sessionString?: string;
+}
+
 interface StateDaemonConfig {
   runtime: RuntimeConfig;
   grpc: {
@@ -35,7 +43,9 @@ interface StateDaemonConfig {
     vfsTarget: string;
   };
   telegram: {
-    botToken: string;
+    mode: "bot" | "userbot";
+    botToken?: string;
+    userbot?: UserBotConfig;
     ownerUserId: string;
   };
   model: {
@@ -227,9 +237,51 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
     process.env.AGENT_ENCLAVE_TARGET ??
     requireString(grpcConfig.enclaveTarget, "stateDaemon.grpc.enclaveTarget");
   const vfsTarget = process.env.MEMORY_VFS_TARGET ?? requireString(grpcConfig.vfsTarget, "stateDaemon.grpc.vfsTarget");
-  const botToken = process.env.BOT_TOKEN ?? requireString(telegramConfig.botToken, "stateDaemon.telegram.botToken");
+  
+  // Telegram mode configuration
+  const mode = (process.env.TELEGRAM_MODE ??
+    requireString(telegramConfig.mode, "stateDaemon.telegram.mode")) as "bot" | "userbot";
+  
+  if (mode !== "bot" && mode !== "userbot") {
+    throw new Error(`Invalid telegram mode: ${mode}. Expected "bot" or "userbot".`);
+  }
+  
   const ownerUserId =
     process.env.OWNER_USER_ID ?? requireString(telegramConfig.ownerUserId, "stateDaemon.telegram.ownerUserId");
+  
+  // Build telegram config based on mode
+  let telegramResult: StateDaemonConfig["telegram"];
+  
+  if (mode === "userbot") {
+    const userbotConfig = requireObject(telegramConfig.userbot, "stateDaemon.telegram.userbot");
+    const apiId = parseInt(
+      process.env.TELEGRAM_API_ID ?? requireString(userbotConfig.apiId, "stateDaemon.telegram.userbot.apiId"),
+      10
+    );
+    const apiHash = process.env.TELEGRAM_API_HASH ?? requireString(userbotConfig.apiHash, "stateDaemon.telegram.userbot.apiHash");
+    const phoneNumber = process.env.TELEGRAM_PHONE ?? requireString(userbotConfig.phoneNumber, "stateDaemon.telegram.userbot.phoneNumber");
+    const password = process.env.TELEGRAM_PASSWORD ?? (userbotConfig.password as string | undefined);
+    const sessionString = process.env.TELEGRAM_SESSION_STRING ?? (telegramConfig.sessionString as string | undefined);
+    
+    telegramResult = {
+      mode,
+      userbot: {
+        apiId,
+        apiHash,
+        phoneNumber,
+        password,
+        sessionString,
+      },
+      ownerUserId,
+    };
+  } else {
+    const botToken = process.env.BOT_TOKEN ?? requireString(telegramConfig.botToken, "stateDaemon.telegram.botToken");
+    telegramResult = {
+      mode,
+      botToken,
+      ownerUserId,
+    };
+  }
   const llmOllamaBaseUrl =
     process.env.OLLAMA_BASE_URL ??
     requireString(llmOllamaConfig.baseUrl, "stateDaemon.model.llm.ollama.baseUrl");
@@ -273,10 +325,7 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
       enclaveTarget,
       vfsTarget,
     },
-    telegram: {
-      botToken,
-      ownerUserId,
-    },
+    telegram: telegramResult,
     model: {
       llm: {
         ollama: {
