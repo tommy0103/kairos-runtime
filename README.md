@@ -113,6 +113,18 @@ export BOT_TOKEN="your_telegram_bot_token"
 export API_KEY="your_llm_api_key"
 ```
 
+Build `memory-vfs` artifact on host (faster than compiling in Docker):
+
+```bash
+bash scripts/build-vfs.sh --release
+# or:
+bash scripts/build-vfs.sh --debug
+```
+
+`build-vfs.sh` defaults to Docker backend (`rust:bookworm`) to avoid glibc mismatch
+between host-built binaries and Debian runtime container. Use `--native` only when
+your host libc is compatible with container runtime.
+
 ```bash
 docker compose up --build app
 ```

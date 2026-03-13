@@ -11,7 +11,7 @@
         "protoPath": ".runtime/proto/enclave-runtime/enclave.proto"
       },
       "llm": {
-        "apiKey": "",
+        "apiKey": "${ENV:ENCLAVE_API_KEY}",
         "baseURL": "https://coding.dashscope.aliyuncs.com/v1",
         "model": "kimi-k2.5"
       },
@@ -35,7 +35,7 @@
             "model": "qwen3.5:0.8b"
           },
           "cloud": {
-            "apiKey": "${ENV:API_KEY}",
+            "apiKey": "${ENV:CLOUD_API_KEY}",
             "baseURL": "https://ark.cn-beijing.volces.com/api/v3",
             "model": "doubao-seed-2-0-lite-260215"
           }

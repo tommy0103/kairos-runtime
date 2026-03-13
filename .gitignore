@@ -67,5 +67,6 @@ irc_disentangle/
 # dramatic-conversation-disentanglement/
 
 src/vfs/target
+.artifacts/
 
 src/sandbox/target

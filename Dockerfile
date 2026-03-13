@@ -21,6 +21,7 @@ RUN set -eux; \
       build-essential \
       pkg-config \
       libssl-dev \
+      libprotobuf-dev \
       protobuf-compiler \
       unzip; \
     rm -rf /var/lib/apt/lists/*

@@ -1,5 +1,5 @@
 node_modules
-src/sandbox/target
+src/**/target
 target
 .git
 .cache
@@ -9,3 +9,4 @@ data
 .runtime
 .memoh-debug
 __pycache__
+.venv
