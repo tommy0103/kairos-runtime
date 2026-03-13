@@ -33,6 +33,10 @@ services:
       bun --version;
       rm -rf node_modules;
       bun install;
+      
+      # Ensure native modules are built
+      cd node_modules/websocket && npm run build || true;
+      cd /workspace;
 
       vfs_bin='/opt/artifacts/memory-vfs';
       vfs_socket='/tmp/kairos-runtime-vfs.sock';
