@@ -79,7 +79,7 @@ export function createInMemoryContextStore(
       const messageId = message.messageId;
       const isShortMessage = message.context.length <= SHORT_MESSAGE_LENGTH;
       const ccb = getOrCreateChatControlBlock(chatControlBlocks, chatId);
-      await downgradeExpiredSessions(ccb, now, SESSION_LRU_EXPIRE_MS, archiverService);
+      void downgradeExpiredSessions(ccb, now, SESSION_LRU_EXPIRE_MS, archiverService);
       const existing = ccb.messageNodes.get(messageId);
       if (existing) {
         existing.message = message;
@@ -422,7 +422,7 @@ async function downgradeExpiredSessions(
     if (now - session.lastActiveTime > expireAfterMs) {
       downgradeSessionStatus(session);
       if (session.status === "L3_ARCHIVED") {
-        void archiveSession(ccb, session, archiverService);
+        await archiveSession(ccb, session, archiverService);
         ccb.sessionControlBlocks.delete(session.sessionId);
         for (const messageId of session.messageIds) {
           ccb.messageNodes.delete(messageId);

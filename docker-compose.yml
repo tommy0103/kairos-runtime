@@ -7,6 +7,7 @@ services:
     user: root
     volumes:
       - .:/workspace
+      - ./.artifacts:/opt/artifacts:ro
       - /run/containerd/containerd.sock:/run/containerd/containerd.sock
       - /tmp:/tmp
     extra_hosts:
@@ -15,12 +16,67 @@ services:
       SANDBOX_DRY_RUN: "0"
       SANDBOX_IMAGE: "debian:slim"
       BOT_TOKEN: "${BOT_TOKEN:-}"
-      API_KEY: "${QWEN_API_KEY:-}"
-    command: >
+      ENCLAVE_API_KEY: "${QWEN_API_KEY:-}"
+      CLOUD_API_KEY: "${ARK_API_KEY:-}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      OLLAMA_EMBED_MODEL: "${OLLAMA_EMBED_MODEL:-qwen3-embedding:0.6b}"
+      VFS_READY_TIMEOUT_SEC: "${VFS_READY_TIMEOUT_SEC:-1800}"
+    command: |
       bash -lc "
-      bun --version &&
-      bun install &&
-      bun run dev
+      set -euo pipefail;
+      bun --version;
+      bun install;
+
+      vfs_bin='/opt/artifacts/memory-vfs';
+      vfs_socket='/tmp/kairos-runtime-vfs.sock';
+      if [ ! -x \"$$vfs_bin\" ]; then
+        echo '[app] missing vfs artifact: /opt/artifacts/memory-vfs';
+        echo '[app] run on host: bash scripts/build-vfs.sh --release (or --debug)';
+        exit 1;
+      fi;
+
+      rm -f \"$$vfs_socket\";
+      $$vfs_bin &
+      vfs_pid=$$!;
+      app_pid='';
+
+      cleanup() {
+        kill $${vfs_pid:-} $${app_pid:-} 2>/dev/null || true;
+      };
+      trap cleanup INT TERM EXIT;
+
+      for i in $$(seq 1 $$VFS_READY_TIMEOUT_SEC); do
+        if [ -S \"$$vfs_socket\" ]; then
+          echo \"[app] memory-vfs socket ready at $$vfs_socket\";
+          break;
+        fi;
+        if ! kill -0 $$vfs_pid 2>/dev/null; then
+          echo '[app] memory-vfs exited before socket became ready';
+          wait $$vfs_pid;
+          exit 1;
+        fi;
+        if [ $$((i % 10)) -eq 0 ]; then
+          echo \"[app] waiting for memory-vfs socket... $$i/$$VFS_READY_TIMEOUT_SEC s\";
+        fi;
+        sleep 1;
+      done;
+
+      if [ ! -S \"$$vfs_socket\" ] || ! kill -0 $$vfs_pid 2>/dev/null; then
+        echo '[app] timeout waiting for memory-vfs socket';
+        exit 1;
+      fi;
+
+      bun run dev &
+      app_pid=$$!;
+
+      wait -n $$vfs_pid $$app_pid;
+      exit_code=$$?;
+
+      cleanup;
+      if [ -n \"$$app_pid\" ]; then
+        wait $$app_pid 2>/dev/null || true;
+      fi;
+      exit $$exit_code
       "
 
   sandboxd:
