@@ -31,6 +31,7 @@ services:
       bash -lc "
       set -euo pipefail;
       bun --version;
+      rm -rf node_modules;
       bun install;
 
       vfs_bin='/opt/artifacts/memory-vfs';
