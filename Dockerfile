@@ -23,6 +23,9 @@ RUN set -eux; \
       libssl-dev \
       libprotobuf-dev \
       protobuf-compiler \
+      python3 \
+      make \
+      g++ \
       unzip; \
     rm -rf /var/lib/apt/lists/*
 
