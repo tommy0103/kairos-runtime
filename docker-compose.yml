@@ -21,6 +21,12 @@ services:
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       OLLAMA_EMBED_MODEL: "${OLLAMA_EMBED_MODEL:-qwen3-embedding:0.6b}"
       VFS_READY_TIMEOUT_SEC: "${VFS_READY_TIMEOUT_SEC:-1800}"
+      TELEGRAM_MODE: "${TELEGRAM_MODE:-bot}"
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
+      TELEGRAM_PHONE: "${TELEGRAM_PHONE:-}"
+      TELEGRAM_PASSWORD: "${TELEGRAM_PASSWORD:-}"
+      OWNER_USER_ID: "${OWNER_USER_ID:-}"
     command: |
       bash -lc "
       set -euo pipefail;
