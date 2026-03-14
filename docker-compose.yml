@@ -10,18 +10,16 @@ services:
       - .:/workspace
       - ./.artifacts:/opt/artifacts:ro
       - /run/containerd/containerd.sock:/run/containerd/containerd.sock
+      - /run/kairos-runtime:/run/kairos-runtime
       - /tmp:/tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       SANDBOX_DRY_RUN: "0"
       SANDBOX_IMAGE: "debian:slim"
-      BOT_TOKEN: "${BOT_TOKEN:-}"
       API_KEY: "${API_KEY:-}"
       BASE_URL: "${BASE_URL:-}"
       MODEL: "${MODEL:-}"
-      ENCLAVE_API_KEY: "${QWEN_API_KEY:-}"
-      CLOUD_API_KEY: "${ARK_API_KEY:-}"
       STATE_DAEMON_CLOUD_API_KEY: "${STATE_DAEMON_CLOUD_API_KEY:-}"
       STATE_DAEMON_CLOUD_BASE_URL: "${STATE_DAEMON_CLOUD_BASE_URL:-}"
       STATE_DAEMON_CLOUD_MODEL: "${STATE_DAEMON_CLOUD_MODEL:-}"
@@ -38,69 +36,13 @@ services:
       TELEGRAM_SILENT_STREAM: "${TELEGRAM_SILENT_STREAM:-false}"
       OWNER_USER_ID: "${OWNER_USER_ID:-}"
       MEMORY_FILES_ROOT: "/workspace/.runtime/memory_files"
-    command: |
-      bash -lc "
-      set -euo pipefail;
-      export PATH=/root/.bun/bin:$$PATH;
-      bun --version;
-      bun install -g node-gyp typescript;
-      bun install;
-      
-      # Ensure native modules are built
-      cd node_modules/websocket && npm run build || true;
-      cd /workspace;
-
-      vfs_bin='/opt/artifacts/memory-vfs';
-      vfs_socket='/run/kairos-runtime/sockets/kairos-runtime-vfs.sock';
-      if [ ! -x \"$$vfs_bin\" ]; then
-        echo '[app] missing vfs artifact: /opt/artifacts/memory-vfs';
-        echo '[app] run on host: bash scripts/build-vfs.sh --release (or --debug)';
-        exit 1;
-      fi;
-
-      rm -f \"$$vfs_socket\";
-      $$vfs_bin &
-      vfs_pid=$$!;
-      app_pid='';
-
-      cleanup() {
-        kill $${vfs_pid:-} $${app_pid:-} 2>/dev/null || true;
-      };
-      trap cleanup INT TERM EXIT;
-
-      for i in $$(seq 1 $$VFS_READY_TIMEOUT_SEC); do
-        if [ -S \"$$vfs_socket\" ]; then
-          echo \"[app] memory-vfs socket ready at $$vfs_socket\";
-          break;
-        fi;
-        if ! kill -0 $$vfs_pid 2>/dev/null; then
-          echo '[app] memory-vfs exited before socket became ready';
-          wait $$vfs_pid;
-          exit 1;
-        fi;
-        if [ $$((i % 10)) -eq 0 ]; then
-          echo \"[app] waiting for memory-vfs socket... $$i/$$VFS_READY_TIMEOUT_SEC s\";
-        fi;
-        sleep 1;
-      done;
-
-      if [ ! -S \"$$vfs_socket\" ] || ! kill -0 $$vfs_pid 2>/dev/null; then
-        echo '[app] timeout waiting for memory-vfs socket';
-        exit 1;
-      fi;
-
-      bun run dev &
-      app_pid=$$!;
-
-      wait -n $$vfs_pid $$app_pid;
-      exit_code=$$?;
-
-      cleanup;
-      if [ -n \"$$app_pid\" ]; then
-        wait $$app_pid 2>/dev/null || true;
-      fi;
-      exit $$exit_code
-      "
+      # 同步 Socket 路径变量 (客户端 + 服务端)
+      KAIROS_ENCLAVE_SOCKET: "unix:///run/kairos-runtime/sockets/kairos-runtime-enclave.sock"
+      KAIROS_VFS_SOCKET: "unix:///run/kairos-runtime/sockets/kairos-runtime-vfs.sock"
+      AGENT_ENCLAVE_BIND_ADDR: "unix:///run/kairos-runtime/sockets/kairos-runtime-enclave.sock"
+      AGENT_ENCLAVE_TARGET: "unix:///run/kairos-runtime/sockets/kairos-runtime-enclave.sock"
+      MEMORY_VFS_TARGET: "unix:///run/kairos-runtime/sockets/kairos-runtime-vfs.sock"
+    command: /workspace/entrypoint.sh
 
   sandboxd:
     build:
