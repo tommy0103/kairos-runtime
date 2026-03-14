@@ -230,11 +230,32 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
   };
 
   const start: TelegramAdapter["start"] = async () => {
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (err: any) {
+      console.error("UserBot: 连接失败", err);
+    }
 
     const sessionSaved = client.session.save() as unknown as string;
-    if (!sessionSaved) {
-      console.log("UserBot: 需要登录，开始认证流程...");
+    let needsAuth = !sessionSaved;
+
+    if (!needsAuth) {
+      try {
+        // Test if the session is actually valid
+        await client.getMe();
+        console.log("UserBot: 使用已有 session 登录成功");
+      } catch (err: any) {
+        if (err.errorMessage === "AUTH_KEY_UNREGISTERED" || err.code === 401) {
+          console.log("UserBot: Session 已失效，准备重新认证...");
+          needsAuth = true;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (needsAuth) {
+      console.log("UserBot: 开始认证流程...");
       await client.start({
         phoneNumber: options.phoneNumber,
         password: async () => options.password || "",
@@ -259,8 +280,6 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         writeFileSync(options.sessionFilePath, sessionString, "utf-8");
         console.log(`Session 已保存到: ${options.sessionFilePath}`);
       }
-    } else {
-      console.log("UserBot: 使用已有 session 登录");
     }
 
     me = await client.getMe() as Api.User;
