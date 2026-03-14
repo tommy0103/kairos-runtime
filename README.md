@@ -187,4 +187,6 @@ Notes:
 
 ## License
 
-MIT
+LICENSE: AGPLv3
+
+Copyright (C) 2026 kairos-runtime. All rights reserved.
