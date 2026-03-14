@@ -130,7 +130,6 @@ export function createMessageGateway(
     if (!flushed.some((message) => message.messageId === triggerMessage.messageId)) {
       await recordNormalizedMessage(triggerMessage);
     }
-    triggeredMessageIds.add(rawMessage.messageId);
     await handleTriggerMessage(triggerMessage, decision);
   };
 
@@ -142,6 +141,7 @@ export function createMessageGateway(
       if (!decision.shouldTrigger || !decision.prompt) {
         return;
       }
+      triggeredMessageIds.add(rawMessage.messageId);
       await flushRecordAndTrigger(rawMessage, decision);
     })().catch((error) => {
       console.error("message gateway handler failed:", error);
@@ -159,6 +159,10 @@ export function createMessageGateway(
       if (!decision.shouldTrigger || !decision.prompt) {
         return;
       }
+      if (triggeredMessageIds.has(editedMessage.messageId)) {
+        return;
+      }
+      triggeredMessageIds.add(editedMessage.messageId);
       await flushRecordAndTrigger(editedMessage, decision);
     })().catch((error) => {
       console.error("message gateway edited handler failed:", error);
