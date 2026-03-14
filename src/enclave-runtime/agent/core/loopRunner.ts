@@ -30,29 +30,11 @@ export interface AgentLoopRunner {
 }
 
 export type AgentLoopStreamEvent =
-  | {
-      type: "message_update";
-      role: "assistant";
-      delta: string;
-    }
-  | {
-      type: "tool_execution_start";
-      toolName: string;
-      toolCallId?: string;
-    }
-  | {
-      type: "tool_execution_end";
-      toolName: string;
-      toolCallId?: string;
-      result?: unknown;
-    }
-  | {
-      type: "completed";
-    }
-  | {
-      type: "failed";
-      error: string;
-    };
+  | { type: "message_update"; role: "assistant"; delta: string; }
+  | { type: "tool_execution_start"; toolName: string; toolCallId?: string; }
+  | { type: "tool_execution_end"; toolName: string; toolCallId?: string; result?: unknown; }
+  | { type: "completed"; }
+  | { type: "failed"; error: string; };
 
 export interface CreateAgentLoopRunnerOptions {
   apiKey: string;
@@ -63,272 +45,74 @@ export interface CreateAgentLoopRunnerOptions {
   unregisterTool: (name: string) => Promise<boolean>;
 }
 
-const DEFAULT_PROVIDER = "openai";
-const FORCE_UA = process.env.OPENAI_FORCE_USER_AGENT?.trim();
-
 function createCompatibleModel(modelId: string, baseURL: string): Model<"openai-completions"> {
   return {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions",
-    provider: DEFAULT_PROVIDER,
-    baseUrl: baseURL,
-    reasoning: false,
-    input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128000,
-    maxTokens: 4096,
-    headers: FORCE_UA ? { "User-Agent": FORCE_UA } : undefined,
+    id: modelId, name: modelId, api: "openai-completions", provider: "openai", baseUrl: baseURL,
+    reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000, maxTokens: 4096
   };
 }
 
 function extractSystemPrompt(messages: AgentLoopMessage[]): string {
-  return messages
-    .filter((item) => item.role === "system")
-    .map((item) => item.content)
-    .join("\n")
-    .trim();
-}
-
-function extractAssistantTextFromMessages(messages: AgentMessage[]): string {
-  for (const message of [...messages].reverse()) {
-    if ((message as any)?.role !== "assistant") {
-      continue;
-    }
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string" && content) {
-      return content;
-    }
-    if (!Array.isArray(content)) {
-      continue;
-    }
-    const text = (content as Array<{ type?: string; text?: string }>)
-      .filter((block) => block.type === "text" && typeof block.text === "string")
-      .map((block) => block.text as string)
-      .join("");
-    if (text) {
-      return text;
-    }
-  }
-  return "";
-}
-
-function syncToolsInPlace(context: AgentContext, tools: AgentTool<any>[]) {
-  if (!Array.isArray(context.tools)) {
-    context.tools = [...tools];
-    return;
-  }
-  context.tools.splice(0, context.tools.length, ...tools);
-}
-
-function isLlmMessage(message: AgentMessage): message is Message {
-  const role = (message as any)?.role;
-  return role === "user" || role === "assistant" || role === "toolResult";
-}
-
-interface ApoptosisToolResult {
-  details?: {
-    targetToolName?: string;
-  };
-}
-
-function extractApoptosisTargetToolName(result: unknown): string | null {
-  const targetToolName = (result as ApoptosisToolResult | undefined)?.details?.targetToolName;
-  if (typeof targetToolName !== "string") {
-    return null;
-  }
-  const normalized = targetToolName.trim();
-  return normalized.length > 0 ? normalized : null;
+  return messages.filter((item) => item.role === "system").map((item) => item.content).join("\n").trim();
 }
 
 export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): AgentLoopRunner {
   const activeAgentLoops = new Set<AgentContext>();
-
   const applyToolsToActiveLoops = () => {
     const tools = options.getCurrentTools();
-    for (const activeAgentLoop of activeAgentLoops) {
-      syncToolsInPlace(activeAgentLoop, tools);
+    for (const loop of activeAgentLoops) {
+      if (Array.isArray(loop.tools)) loop.tools.splice(0, loop.tools.length, ...tools);
+      else loop.tools = [...tools];
     }
   };
 
-  const streamEvents: AgentLoopRunner["streamEvents"] = async function* (
-    messages,
-    generateOptions = {}
-  ) {
+  const streamEvents: AgentLoopRunner["streamEvents"] = async function* (messages, generateOptions = {}) {
     const model = createCompatibleModel(generateOptions.model ?? options.defaultModel, options.baseURL);
     const systemPrompt = extractSystemPrompt(messages);
-    console.log("LoopRunner messages", messages);
-
-    const loopContext: AgentContext = {
-      systemPrompt,
-      messages: [],
-      tools: options.getCurrentTools(),
-    };
+    const loopContext: AgentContext = { systemPrompt, messages: [], tools: options.getCurrentTools() };
     const abortController = new AbortController();
     activeAgentLoops.add(loopContext);
 
-    let currentMessageHasToolCall = false;
     let currentMessageTextBuffer = "";
     let globalMessageHasEmitted = false;
     try {
-      const stream = agentLoop(
-        messages as AgentMessage[],
-        loopContext,
-        {
-          model,
-          apiKey: options.apiKey,
-          temperature: generateOptions.temperature,
-          convertToLlm: async (agentMessages) => agentMessages.filter(isLlmMessage),
-        },
-        abortController.signal
-      );
+      const stream = agentLoop(messages as AgentMessage[], loopContext, { model, apiKey: options.apiKey, temperature: generateOptions.temperature, convertToLlm: async (msgs) => msgs.filter((m: any) => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as any }, abortController.signal);
 
       for await (const event of stream) {
         if (event.type === "message_update") {
-          const assistantEvent = event.assistantMessageEvent;
-          if (assistantEvent.type === "text_delta" && assistantEvent.delta) {
-            currentMessageTextBuffer += assistantEvent.delta;
-            continue;
-          }
-          if (assistantEvent.type === "text_end" && assistantEvent.content) {
-            if (!currentMessageTextBuffer) {
-              currentMessageTextBuffer = assistantEvent.content;
-            }
-            continue;
-          }
-          if (
-            assistantEvent.type === "toolcall_start" ||
-            assistantEvent.type === "toolcall_delta" ||
-            assistantEvent.type === "toolcall_end"
-          ) {
-            currentMessageHasToolCall = true;
-          }
+          const ae = event.assistantMessageEvent;
+          if (ae.type === "text_delta" && ae.delta) { currentMessageTextBuffer += ae.delta; continue; }
+          if (ae.type === "text_end" && ae.content) { if (!currentMessageTextBuffer) currentMessageTextBuffer = ae.content; continue; }
           continue;
         }
-
         if (event.type === "message_end") {
-          const message = event.message as {
-            role?: string;
-            content?: Array<{ type?: string; text?: string }>;
-          };
-          if (message.role !== "assistant") {
-            currentMessageHasToolCall = false;
-            currentMessageTextBuffer = "";
-            continue;
+          const msg = event.message as any;
+          if (msg.role === "assistant" && currentMessageTextBuffer) {
+            globalMessageHasEmitted = true;
+            yield { type: "message_update", role: "assistant", delta: currentMessageTextBuffer };
           }
-          if (!currentMessageHasToolCall) {
-            let output = currentMessageTextBuffer;
-            if (!output && Array.isArray(message.content)) {
-              output = message.content
-                .filter((block) => block.type === "text" && typeof block.text === "string")
-                .map((block) => block.text as string)
-                .join("");
-            }
-            if (output) {
-              globalMessageHasEmitted = true;
-              yield {
-                type: "message_update",
-                role: "assistant",
-                delta: output,
-              };
-            }
-          }
-          currentMessageHasToolCall = false;
           currentMessageTextBuffer = "";
           continue;
         }
-
-        if (event.type === "tool_execution_end") {
-          if (event.toolName === "evolute") {
-            const pendingTool = consumePendingEvolutedTool(event.toolCallId);
-            if (pendingTool) {
-              await options.registerDynamicTool(pendingTool);
-            } else {
-              console.warn(
-                `[evolute] pending tool not found for toolCallId=${String(event.toolCallId)}`
-              );
-            }
-            const latestTools = options.getCurrentTools();
-            syncToolsInPlace(loopContext, latestTools);
-          } else if (event.toolName === "apoptosis") {
-            const targetToolName = extractApoptosisTargetToolName(event.result);
-            if (targetToolName) {
-              await options.unregisterTool(targetToolName);
-              const latestTools = options.getCurrentTools();
-              syncToolsInPlace(loopContext, latestTools);
-            }
-          }
-          console.log("tool_execution_end", event.result);
-          yield {
-            type: "tool_execution_end",
-            toolName: event.toolName,
-            toolCallId: event.toolCallId,
-            result: event.result,
-          };
-          continue;
-        }
-
-        if (event.type === "tool_execution_start") {
-          console.log("tool_execution_start", event);
-          yield {
-            type: "tool_execution_start",
-            toolName: event.toolName,
-            toolCallId: event.toolCallId,
-          };
-          continue;
-        }
       }
-
-      if (!globalMessageHasEmitted) {
-        const newMessages = await stream.result();
-        const fallbackText = extractAssistantTextFromMessages(newMessages);
-        console.log(
-          `[loopRunner] fallback extraction: found=${Boolean(fallbackText)} length=${fallbackText.length}`
-        );
-        if (fallbackText) {
-          yield {
-            type: "message_update",
-            role: "assistant",
-            delta: fallbackText,
-          };
-        }
+      // 暴力兜底逻辑
+      if (!globalMessageHasEmitted && currentMessageTextBuffer.trim().length > 0) {
+        yield { type: "message_update", role: "assistant", delta: currentMessageTextBuffer.trim() };
       }
       yield { type: "completed" };
-    } catch (error) {
-      yield {
-        type: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      };
+    } catch (error: any) {
+      yield { type: "failed", error: error.message || String(error) };
     } finally {
       abortController.abort();
       activeAgentLoops.delete(loopContext);
-      loopContext.messages.splice(0, loopContext.messages.length);
     }
   };
 
-  const streamText: AgentLoopRunner["streamText"] = async function* (
-    messages,
-    generateOptions = {}
-  ) {
-    for await (const event of streamEvents(messages, generateOptions)) {
-      if (event.type === "message_update" && event.delta) {
-        yield event.delta;
-        continue;
-      }
-      if (event.type === "failed") {
-        throw new Error(event.error);
-      }
+  return { streamEvents, streamText: async function* (msgs, opts = {}) {
+    for await (const ev of streamEvents(msgs, opts)) {
+      if (ev.type === "message_update" && ev.delta) yield ev.delta;
+      if (ev.type === "failed") throw new Error(ev.error);
     }
-  };
-
-  return {
-    streamEvents,
-    streamText,
-    applyToolsToActiveLoops,
-  };
+  }, applyToolsToActiveLoops };
 }

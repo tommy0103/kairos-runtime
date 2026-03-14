@@ -23,5 +23,8 @@
     "grpc-tools": "^1.13.1",
     "ts-proto": "^2.11.4"
   },
-  "module": "src/index.js"
+  "module": "src/index.js",
+  "dependencies": {
+    "telegram": "^2.26.22"
+  }
 }
