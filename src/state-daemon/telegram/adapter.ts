@@ -5,6 +5,7 @@ import type {
   TelegramConversationType,
   TelegramMessage,
 } from "./types";
+import { markdownToTelegramHtml } from "./markdownToHtml";
 
 const DEFAULT_PLACEHOLDER = "小猫正在玩毛线球...";
 const DEFAULT_FINAL_TEXT = "(空内容)";
@@ -105,27 +106,35 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     }
 
     const finalText = state.chunks.join("") || DEFAULT_FINAL_TEXT;
-    const escapedFinalText = escapeText(finalText);
+
     try {
-      const finalMessage = await retry(
-        async () => {
-          return await bot.api.editMessageText(
+      let finalMessage;
+      try {
+        const htmlText = markdownToTelegramHtml(finalText);
+        finalMessage = await retry(
+          () => bot.api.editMessageText(
             state.chatId,
             state.placeholderMessageId,
-            escapedFinalText,
-            {
-              parse_mode: "MarkdownV2"
-            }
-          );
-        },
-        EDIT_RETRY_ATTEMPTS,
-        EDIT_RETRY_DELAY_MS
-      );
-      // console.log("finalMessage", finalMessage);
-      // console.log("state", state);
+            htmlText,
+            { parse_mode: "HTML" }
+          ),
+          EDIT_RETRY_ATTEMPTS,
+          EDIT_RETRY_DELAY_MS
+        );
+      } catch {
+        console.warn("HTML formatting failed, falling back to plain text");
+        finalMessage = await retry(
+          () => bot.api.editMessageText(
+            state.chatId,
+            state.placeholderMessageId,
+            finalText,
+          ),
+          EDIT_RETRY_ATTEMPTS,
+          EDIT_RETRY_DELAY_MS
+        );
+      }
+
       const outgoing = toEditedResultMessage(finalMessage, state, finalText);
-      // console.log("state", state);
-      // console.log("outgoing", outgoing);
       if (outgoing) {
         dispatchMessage(outgoing);
       }
@@ -505,27 +514,3 @@ function isRetryableNetworkError(error: unknown): boolean {
   );
 }
 
-function escapeText(text: string): string {
-  const escapeMarkdownV2 = (value: string): string =>
-    value.replace(/[\\_*\[\]()~>#+\-=|{}.!]/g, "\\$&");
-  const escapeMarkdownV2Url = (value: string): string =>
-    value.replace(/[\\)]/g, "\\$&");
-  const placeholders: string[] = [];
-
-  const protectedText = text.replace(
-    /\[([^\]\n]+)\]\(([^)\n]+)\)/g,
-    (_, label: string, url: string) => {
-      const token = `\u0000LINK${placeholders.length}\u0000`;
-      const escapedLabel = escapeMarkdownV2(label);
-      const escapedUrl = escapeMarkdownV2Url(url);
-      placeholders.push(`[${escapedLabel}](${escapedUrl})`);
-      return token;
-    }
-  );
-
-  const escaped = escapeMarkdownV2(protectedText);
-  return escaped.replace(/\u0000LINK(\d+)\u0000/g, (_, indexText: string) => {
-    const index = Number(indexText);
-    return placeholders[index] ?? "";
-  });
-}
