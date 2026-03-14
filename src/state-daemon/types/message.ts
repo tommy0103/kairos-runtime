@@ -16,6 +16,7 @@ export interface TelegramMessage {
   conversationType: TelegramConversationType;
   context: string;
   timestamp: number;
+  imageUrls?: string[];
   metadata: {
     isBot: boolean;
     username: string | null;

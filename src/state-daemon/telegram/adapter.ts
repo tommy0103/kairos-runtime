@@ -228,6 +228,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
       return;
     }
 
+    message.imageUrls = await resolvePhotoUrls(ctx.message?.photo, bot, token);
     dispatchMessage(message);
 
     await next();
@@ -518,5 +519,26 @@ function isRetryableNetworkError(error: unknown): boolean {
     lowerMessage.includes("fetch failed") ||
     lowerMessage.includes("network error")
   );
+}
+
+async function resolvePhotoUrls(
+  photos: ReadonlyArray<{ file_id: string }> | undefined,
+  bot: Bot,
+  token: string
+): Promise<string[]> {
+  if (!photos?.length) {
+    return [];
+  }
+  const largest = photos[photos.length - 1];
+  try {
+    const file = await bot.api.getFile(largest.file_id);
+    if (!file.file_path) {
+      return [];
+    }
+    return [`https://api.telegram.org/file/bot${token}/${file.file_path}`];
+  } catch (error) {
+    console.error("resolvePhotoUrls failed:", error);
+    return [];
+  }
 }
 

@@ -15,6 +15,7 @@ export interface AgentLoopMessage {
 export interface AgentLoopGenerateOptions {
   model?: string;
   temperature?: number;
+  imageUrls?: string[];
 }
 
 export interface AgentLoopRunner {
@@ -74,7 +75,7 @@ function createCompatibleModel(modelId: string, baseURL: string): Model<"openai-
     provider: DEFAULT_PROVIDER,
     baseUrl: baseURL,
     reasoning: false,
-    input: ["text"],
+    input: ["text", "image"],
     cost: {
       input: 0,
       output: 0,
@@ -146,6 +147,91 @@ function extractApoptosisTargetToolName(result: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+async function downloadImageAsBase64(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const base64 = buf.toString("base64");
+    const contentType = detectImageMime(buf, res.headers.get("content-type"), url);
+    return `data:${contentType};base64,${base64}`;
+  } catch {
+    return null;
+  }
+}
+
+function detectImageMime(buf: Buffer, headerType: string | null, url: string): string {
+  if (buf[0] === 0xFF && buf[1] === 0xD8) return "image/jpeg";
+  if (buf[0] === 0x89 && buf[1] === 0x50) return "image/png";
+  if (buf[0] === 0x47 && buf[1] === 0x49) return "image/gif";
+  if (buf[0] === 0x52 && buf[1] === 0x49) return "image/webp";
+
+  if (headerType && headerType.startsWith("image/")) return headerType;
+
+  const ext = url.split("?")[0].split(".").pop()?.toLowerCase();
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+
+  return "image/jpeg";
+}
+
+async function callVisionApi(
+  imageRefs: string[],
+  apiKey: string,
+  baseURL: string,
+  modelId: string,
+): Promise<string | null> {
+  const endpoint = `${baseURL.replace(/\/+$/, "")}/chat/completions`;
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      ...(FORCE_UA ? { "User-Agent": FORCE_UA } : {}),
+    },
+    body: JSON.stringify({
+      model: modelId,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image concisely. Include visible text, objects, and notable details. Use Chinese if appropriate." },
+          ...imageRefs.map((u) => ({ type: "image_url", image_url: { url: u } })),
+        ],
+      }],
+      max_tokens: 800,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.warn(`[vision] HTTP ${res.status}: ${body}`);
+    return null;
+  }
+  const json: any = await res.json();
+  return json?.choices?.[0]?.message?.content ?? null;
+}
+
+async function preprocessVisionContent(
+  imageUrls: string[],
+  apiKey: string,
+  baseURL: string,
+  modelId: string,
+): Promise<string | null> {
+  try {
+    const base64Urls = await Promise.all(imageUrls.map(downloadImageAsBase64));
+    const valid = base64Urls.filter((u): u is string => u !== null);
+    if (!valid.length) {
+      console.warn("[vision] failed to download images for base64 encoding");
+      return null;
+    }
+    return await callVisionApi(valid, apiKey, baseURL, modelId);
+  } catch (err) {
+    console.warn("[vision] preprocessing failed:", err);
+    return null;
+  }
+}
+
 export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): AgentLoopRunner {
   const activeAgentLoops = new Set<AgentContext>();
 
@@ -160,9 +246,28 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     messages,
     generateOptions = {}
   ) {
-    const model = createCompatibleModel(generateOptions.model ?? options.defaultModel, options.baseURL);
+    const { imageUrls, ...genOpts } = generateOptions;
+    const model = createCompatibleModel(genOpts.model ?? options.defaultModel, options.baseURL);
+    if (imageUrls?.length) {
+      const description = await preprocessVisionContent(
+        imageUrls, options.apiKey, options.baseURL, model.id,
+      );
+      if (description) {
+        let lastUserIdx = -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === "user") { lastUserIdx = i; break; }
+        }
+        if (lastUserIdx >= 0) {
+          messages = messages.map((m, i) =>
+            i === lastUserIdx
+              ? { ...m, content: m.content.replace(/\[photo\]/g, `[图片内容: ${description}]`) }
+              : m
+          );
+        }
+      }
+    }
+
     const systemPrompt = extractSystemPrompt(messages);
-    console.log("LoopRunner messages", messages);
 
     const loopContext: AgentContext = {
       systemPrompt,
@@ -182,7 +287,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
         {
           model,
           apiKey: options.apiKey,
-          temperature: generateOptions.temperature,
+          temperature: genOpts.temperature,
           convertToLlm: async (agentMessages) => agentMessages.filter(isLlmMessage),
         },
         abortController.signal
@@ -332,3 +437,4 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     applyToolsToActiveLoops,
   };
 }
+

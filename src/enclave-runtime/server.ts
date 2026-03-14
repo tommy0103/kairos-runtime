@@ -82,6 +82,7 @@ function buildEnabledTools(enabledToolNames: Set<string>) {
 interface GrpcStreamReplyRequest {
   chat_id?: string;
   messages?: Array<{ role?: string; content?: string }>;
+  image_urls?: string[];
 }
 
 interface GrpcStreamReplyEvent {
@@ -259,7 +260,8 @@ server.addService(service, {
     try {
       const request = call.request;
       const messages = sanitizeMessages(request.messages);
-      for await (const event of enclaveRuntime.streamEvents(messages)) {
+      const imageUrls = (request.image_urls ?? []).filter((url: string) => url);
+      for await (const event of enclaveRuntime.streamEvents(messages, { imageUrls })) {
         const grpcEvent = toGrpcEvent(event);
         if (!safeWrite(call, grpcEvent)) {
           break;

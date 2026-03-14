@@ -27,6 +27,7 @@ interface GrpcStreamReplyRequest {
     role: string;
     content: string;
   }>;
+  image_urls: string[];
 }
 
 interface GrpcStreamReplyEvent {
@@ -83,6 +84,7 @@ function toGrpcRequest(request: StreamReplyRequest): GrpcStreamReplyRequest {
       role: item.role,
       content: item.content,
     })),
+    image_urls: request.imageUrls ?? [],
   };
 }
 
