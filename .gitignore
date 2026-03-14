@@ -70,3 +70,4 @@ src/vfs/target
 .artifacts/
 
 src/sandbox/target
+login.js
