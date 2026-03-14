@@ -1,16 +1,20 @@
 {
   "name": "@kairos-runtime/state-daemon",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "AGENT_ENCLAVE_TARGET=unix:///tmp/kairos-runtime-enclave.sock MEMORY_FILES_ROOT=${MEMORY_FILES_ROOT:-../../.runtime/memory_files} bun run --watch ./main.ts"
-  },
   "dependencies": {
-    "@kairos-runtime/app-config": "workspace:*",
     "@bufbuild/protobuf": "^2.11.0",
     "@grpc/grpc-js": "^1.14.3",
     "@grpc/proto-loader": "^0.8.0",
+    "@kairos-runtime/app-config": "workspace:*",
     "grammy": "^1.40.0",
+    "markdown-it": "^14.1.1",
     "nice-grpc": "^2.1.14"
+  },
+  "private": true,
+  "scripts": {
+    "dev": "AGENT_ENCLAVE_TARGET=unix:///tmp/kairos-runtime-enclave.sock MEMORY_FILES_ROOT=${MEMORY_FILES_ROOT:-../../.runtime/memory_files} bun run --watch ./main.ts"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2"
   }
 }
