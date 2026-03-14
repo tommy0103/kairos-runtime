@@ -424,13 +424,12 @@ function toOptionalMessageId(messageId?: number | string): number | undefined {
 }
 
 function isMentionMe(ctx: Context): boolean {
-//   const text = ctx.msg.text ?? "";
-    const message = ctx.msg;
-    if (!message) {
-        return false;
-    }
-    const text = message.text ?? "";
-    return text.includes(`@${ctx.me.username}`);
+  const message = ctx.msg;
+  if (!message) {
+    return false;
+  }
+  const text = message.text ?? message.caption ?? "";
+  return text.includes(`@${ctx.me.username}`);
 }
 
 function isMentionMeEdited(ctx: Context): boolean {
@@ -438,13 +437,20 @@ function isMentionMeEdited(ctx: Context): boolean {
   if (!message) {
     return false;
   }
-  const text = "text" in message ? (message.text ?? "") : "";
+  const text = message.text ?? message.caption ?? "";
   return text.includes(`@${ctx.me.username}`);
 }
 
 function extractMentions(message: NonNullable<Context["message"]>): string[] {
-  const text = "text" in message ? (message.text ?? "") : "";
-  return extractMentionsFromTextWithEntities(text, message.entities);
+  const textMentions = extractMentionsFromTextWithEntities(
+    message.text ?? "",
+    message.entities
+  );
+  const captionMentions = extractMentionsFromTextWithEntities(
+    message.caption ?? "",
+    message.caption_entities
+  );
+  return Array.from(new Set([...textMentions, ...captionMentions]));
 }
 
 function extractMentionsFromTextWithEntities(

@@ -38,6 +38,10 @@ interface StateDaemonConfig {
     botToken: string;
     ownerUserId: string;
   };
+  triggers: {
+    editedMessage: boolean;
+    privateChat: boolean;
+  };
   model: {
     llm: {
       ollama: {
@@ -122,6 +126,21 @@ function requireString(value: unknown, path: string): string {
     throw new Error(`Missing required string at appconfig path "${path}".`);
   }
   return resolveEnvReference(value, path);
+}
+
+function resolveBoolean(value: unknown, path: string, fallback: boolean): boolean {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const resolved = resolveEnvReference(value, path).toLowerCase();
+    if (resolved === "true" || resolved === "1") return true;
+    if (resolved === "false" || resolved === "0") return false;
+  }
+  return fallback;
 }
 
 function resolveEnvReference(raw: string, path: string): string {
@@ -217,6 +236,7 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
   const stateConfig = requireObject(mergedFileConfig.stateDaemon, "stateDaemon");
   const grpcConfig = requireObject(stateConfig.grpc, "stateDaemon.grpc");
   const telegramConfig = requireObject(stateConfig.telegram, "stateDaemon.telegram");
+  const triggersConfig = isObject(stateConfig.triggers) ? stateConfig.triggers : {};
   const modelConfig = requireObject(stateConfig.model, "stateDaemon.model");
   const llmConfig = requireObject(modelConfig.llm, "stateDaemon.model.llm");
   const llmOllamaConfig = requireObject(llmConfig.ollama, "stateDaemon.model.llm.ollama");
@@ -276,6 +296,10 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
     telegram: {
       botToken,
       ownerUserId,
+    },
+    triggers: {
+      editedMessage: resolveBoolean(triggersConfig.editedMessage, "stateDaemon.triggers.editedMessage", true),
+      privateChat: resolveBoolean(triggersConfig.privateChat, "stateDaemon.triggers.privateChat", true),
     },
     model: {
       llm: {

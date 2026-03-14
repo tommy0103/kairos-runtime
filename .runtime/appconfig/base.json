@@ -28,6 +28,10 @@
         "botToken": "${ENV:BOT_TOKEN}",
         "ownerUserId": ""
       },
+      "triggers": {
+        "editedMessage": "${ENV:TRIGGER_EDITED_MESSAGE:-true}",
+        "privateChat": "${ENV:TRIGGER_PRIVATE_CHAT:-true}"
+      },
       "model": {
         "llm": {
           "ollama": {

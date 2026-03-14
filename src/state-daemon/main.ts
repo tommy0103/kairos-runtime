@@ -2,6 +2,7 @@ import {
   createClientRuntime,
   createMentionMeTriggerPolicy,
   createMessageGateway,
+  createPrivateChatTriggerPolicy,
   createReplyToMeTriggerPolicy,
 } from "./gateway";
 import { loadStateDaemonConfig } from "@kairos-runtime/app-config";
@@ -47,11 +48,18 @@ const runtime = createClientRuntime({
   modelConfig: config.model,
 });
 
+const policies = [
+  createReplyToMeTriggerPolicy(),
+  createMentionMeTriggerPolicy(),
+  ...(config.triggers.privateChat ? [createPrivateChatTriggerPolicy()] : []),
+];
+
 const gateway = createMessageGateway({
   telegram,
   runtime,
-  policies: [createReplyToMeTriggerPolicy(), createMentionMeTriggerPolicy()],
+  policies,
   userRoles,
+  enableEditedMessageTrigger: config.triggers.editedMessage,
 });
 
 process.on("SIGINT", () => {
