@@ -35,7 +35,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN set -euo pipefail \
     && curl -fsSL https://bun.sh/install | bash \
     && /root/.bun/bin/bun --version \
-    && ln -sf /root/.bun/bin/bun /usr/local/bin/bun
+    && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
+    && /root/.bun/bin/bun install -g node-gyp typescript
 
 # Install Rust toolchain for sandboxd
 RUN set -euo pipefail \

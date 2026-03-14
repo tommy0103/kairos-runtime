@@ -29,6 +29,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
   );
 
   const messages: TelegramMessage[] = [];
+  const sentMessageIds = new Set<number>();
   const streams = new Map<number, StreamState>();
   let nextStreamId = 1;
   const messageHandlers = new Set<(message: TelegramMessage) => void | Promise<void>>();
@@ -50,6 +51,8 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       });
     }
   };
+
+  let me: Api.User | null = null;
 
   const toTelegramMessage = (event: Api.TypeUpdate): TelegramMessage | null => {
     let message: Api.Message | undefined;
@@ -93,6 +96,11 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       ? message.peerId.userId.toJSNumber().toString()
       : "unknown";
 
+    // Don't process messages from myself
+    if (me && userId === me.id.toString()) {
+      return null;
+    }
+
     const context = message.message || "";
     const timestamp = (message.date || Math.floor(Date.now() / 1000)) * 1000;
 
@@ -106,6 +114,13 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       ? message.replyTo.replyToMsgId
       : null;
 
+    const isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
+
+    // Simple mention check: if username is present in text or if it's a private chat
+    const myUsername = me?.username;
+    const isMentionMe = conversationType === "private" || 
+      (myUsername ? context.includes(`@${myUsername}`) : false);
+
     return {
       userId,
       messageId: message.id,
@@ -118,8 +133,8 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         username: null,
         replyToMessageId: replyToMsgId ?? null,
         replyToUserId: null,
-        isReplyToMe: false,
-        isMentionMe: false,
+        isReplyToMe: isReplyToMe,
+        isMentionMe: isMentionMe,
         mentions: [],
       },
     };
@@ -128,15 +143,13 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
   const reply: TelegramAdapter["reply"] = async (chatId, text, messageId) => {
     const entity = await client.getEntity(chatId.toString());
     
-    if (messageId) {
-      await client.sendMessage(entity, {
-        message: text,
-        replyTo: messageId,
-      });
-    } else {
-      await client.sendMessage(entity, {
-        message: text,
-      });
+    const sent = await client.sendMessage(entity, {
+      message: text,
+      replyTo: messageId || undefined,
+    });
+
+    if (sent instanceof Api.Message) {
+      sentMessageIds.add(sent.id);
     }
   };
 
@@ -147,6 +160,10 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       message: placeholder,
       replyTo: messageId || undefined,
     });
+
+    if (sent instanceof Api.Message) {
+      sentMessageIds.add(sent.id);
+    }
 
     const streamId = nextStreamId++;
     streams.set(streamId, {
@@ -246,7 +263,8 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       console.log("UserBot: 使用已有 session 登录");
     }
 
-    console.log("UserBot: 已连接");
+    me = await client.getMe() as Api.User;
+    console.log(`UserBot: 已作为 ${me.firstName} (@${me.username || "no_username"}) 登录 (ID: ${me.id})`);
 
     client.addEventHandler((event: Api.TypeUpdate) => {
       const message = toTelegramMessage(event);
