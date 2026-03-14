@@ -39,7 +39,7 @@ services:
       cd /workspace;
 
       vfs_bin='/opt/artifacts/memory-vfs';
-      vfs_socket='/tmp/kairos-runtime-vfs.sock';
+      vfs_socket='/run/kairos-runtime/sockets/kairos-runtime-vfs.sock';
       if [ ! -x \"$$vfs_bin\" ]; then
         echo '[app] missing vfs artifact: /opt/artifacts/memory-vfs';
         echo '[app] run on host: bash scripts/build-vfs.sh --release (or --debug)';

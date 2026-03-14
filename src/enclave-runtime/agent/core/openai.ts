@@ -39,10 +39,14 @@ export interface OpenAIAgent {
   listTools: () => string[];
 }
 
+export interface EnclaveStreamOptions extends GenerateTextOptions {
+  imageUrls?: string[];
+}
+
 export interface OpenAIEnclaveRuntime {
   streamEvents: (
     messages: LLMMessage[],
-    options?: GenerateTextOptions
+    options?: EnclaveStreamOptions
   ) => AsyncGenerator<AgentLoopStreamEvent, void, unknown>;
   listTools: () => string[];
   replaceTools: (tools: AgentTool<any>[]) => Promise<void>;
@@ -110,8 +114,9 @@ export function createOpenAIEnclaveRuntime(
 ): OpenAIEnclaveRuntime {
   const core = createAgentCore(options);
   return {
-    streamEvents: async function* (messages, generateOptions = {}) {
-      yield* core.loopRunner.streamEvents(messages, generateOptions);
+    streamEvents: async function* (messages, streamOptions = {}) {
+      const { imageUrls, ...generateOptions } = streamOptions;
+      yield* core.loopRunner.streamEvents(messages, { ...generateOptions, imageUrls });
     },
     listTools: () => core.toolsRegistry.getCurrentTools().map((tool) => tool.name),
     replaceTools: core.replaceTools,

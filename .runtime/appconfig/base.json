@@ -1,58 +1,61 @@
 {
-    "runtime": {
-      "runtimeRoot": ".runtime",
-      "protoRoot": ".runtime/proto",
-      "memoryFilesRoot": ".runtime/memory_files",
-      "evolutionsRoot": ".runtime/evolutions"
+  "runtime": {
+    "runtimeRoot": ".runtime",
+    "protoRoot": ".runtime/proto",
+    "memoryFilesRoot": ".runtime/memory_files",
+    "evolutionsRoot": ".runtime/evolutions"
+  },
+  "enclaveRuntime": {
+    "grpc": {
+      "bindAddr": "${ENV:KAIROS_ENCLAVE_SOCKET:-unix:///run/kairos-runtime/sockets/kairos-runtime-enclave.sock}",
+      "protoPath": ".runtime/proto/enclave-runtime/enclave.proto"
     },
-    "enclaveRuntime": {
-      "grpc": {
-        "bindAddr": "unix:///tmp/kairos-runtime-enclave.sock",
-        "protoPath": ".runtime/proto/enclave-runtime/enclave.proto"
+    "llm": {
+      "apiKey": "${ENV:API_KEY:-ollama}",
+      "baseURL": "${ENV:BASE_URL:-http://127.0.0.1:11434/v1}",
+      "model": "${ENV:MODEL:-qwen3.5:397b-cloud}"
+    },
+    "tools": {
+      "enabled": "all"
+    }
+  },
+  "stateDaemon": {
+    "grpc": {
+      "enclaveTarget": "${ENV:KAIROS_ENCLAVE_SOCKET:-unix:///run/kairos-runtime/sockets/kairos-runtime-enclave.sock}",
+      "vfsTarget": "${ENV:KAIROS_VFS_SOCKET:-unix:///run/kairos-runtime/sockets/kairos-runtime-vfs.sock}"
+    },
+    "telegram": {
+      "mode": "${ENV:TELEGRAM_MODE:-bot}",
+      "botToken": "${ENV:BOT_TOKEN}",
+      "userbot": {
+        "apiId": "${ENV:TELEGRAM_API_ID}",
+        "apiHash": "${ENV:TELEGRAM_API_HASH}",
+        "phoneNumber": "${ENV:TELEGRAM_PHONE}",
+        "password": "${ENV:TELEGRAM_PASSWORD:-}"
       },
+      "ownerUserId": "${ENV:OWNER_USER_ID}"
+    },
+    "triggers": {
+      "editedMessage": "${ENV:TRIGGER_EDITED_MESSAGE:-true}",
+      "privateChat": "${ENV:TRIGGER_PRIVATE_CHAT:-true}"
+    },
+    "model": {
       "llm": {
-        "apiKey": "${ENV:ENCLAVE_API_KEY}",
-        "baseURL": "https://coding.dashscope.aliyuncs.com/v1",
-        "model": "kimi-k2.5"
-      },
-      "tools": {
-        "enabled": "all"
-      }
-    },
-    "stateDaemon": {
-      "grpc": {
-        "enclaveTarget": "unix:///tmp/kairos-runtime-enclave.sock",
-        "vfsTarget": "/tmp/kairos-runtime-vfs.sock"
-      },
-      "telegram": {
-        "mode": "${ENV:TELEGRAM_MODE:-bot}",
-        "botToken": "${ENV:BOT_TOKEN}",
-        "userbot": {
-          "apiId": "${ENV:TELEGRAM_API_ID}",
-          "apiHash": "${ENV:TELEGRAM_API_HASH}",
-          "phoneNumber": "${ENV:TELEGRAM_PHONE}",
-          "password": "${ENV:TELEGRAM_PASSWORD:-}"
+        "ollama": {
+          "baseUrl": "${ENV:OLLAMA_BASE_URL}",
+          "model": "qwen3.5:0.8b"
         },
-        "ownerUserId": "${ENV:OWNER_USER_ID}"
-      },
-      "model": {
-        "llm": {
-          "ollama": {
-            "baseUrl": "http://host.docker.internal:11434",
-            "model": "qwen3.5:0.8b"
-          },
-          "cloud": {
-            "apiKey": "${ENV:CLOUD_API_KEY}",
-            "baseURL": "https://ark.cn-beijing.volces.com/api/v3",
-            "model": "doubao-seed-2-0-lite-260215"
-          }
-        },
-        "embedding": {
-          "provider": "ollama",
-          "ollamaBaseUrl": "http://host.docker.internal:11434",
-          "ollamaModel": "qwen3-embedding:0.6b"
+        "cloud": {
+          "apiKey": "${ENV:STATE_DAEMON_CLOUD_API_KEY:-ollama}",
+          "baseURL": "${ENV:STATE_DAEMON_CLOUD_BASE_URL:-http://127.0.0.1:11434/v1}",
+          "model": "${ENV:STATE_DAEMON_CLOUD_MODEL:-qwen3.5:397b-cloud}"
         }
+      },
+      "embedding": {
+        "provider": "ollama",
+        "ollamaBaseUrl": "${ENV:OLLAMA_BASE_URL}",
+        "ollamaModel": "qwen3-embedding:0.6b"
       }
     }
   }
-  
+}

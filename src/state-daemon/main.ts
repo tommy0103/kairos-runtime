@@ -2,6 +2,7 @@ import {
   createClientRuntime,
   createMentionMeTriggerPolicy,
   createMessageGateway,
+  createPrivateChatTriggerPolicy,
   createReplyToMeTriggerPolicy,
 } from "./gateway";
 import { loadStateDaemonConfig } from "@kairos-runtime/app-config";
@@ -35,6 +36,8 @@ const enclaveClient = createGrpcEnclaveClient({
   target: AGENT_ENCLAVE_TARGET,
 });
 
+console.log(`[state-daemon] AGENT_ENCLAVE_TARGET=${AGENT_ENCLAVE_TARGET}`);
+
 process.on("SIGHUP", () => {});
 
 const userRoles = createUserRolesStore();
@@ -48,11 +51,18 @@ const runtime = createClientRuntime({
   modelConfig: config.model,
 });
 
+const policies = [
+  createReplyToMeTriggerPolicy(),
+  createMentionMeTriggerPolicy(),
+  ...(config.triggers.privateChat ? [createPrivateChatTriggerPolicy()] : []),
+];
+
 const gateway = createMessageGateway({
   telegram,
   runtime,
-  policies: [createReplyToMeTriggerPolicy(), createMentionMeTriggerPolicy()],
+  policies,
   userRoles,
+  enableEditedMessageTrigger: config.triggers.editedMessage,
 });
 
 process.on("SIGINT", () => {

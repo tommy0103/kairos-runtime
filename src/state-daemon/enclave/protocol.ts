@@ -3,6 +3,7 @@ import type { LLMMessage } from "../types/message";
 export interface StreamReplyRequest {
   chatId: number | string;
   messages: LLMMessage[];
+  imageUrls?: string[];
 }
 
 export type EnclaveStreamEvent =

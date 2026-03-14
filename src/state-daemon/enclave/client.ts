@@ -1,5 +1,6 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -12,7 +13,9 @@ const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PROTO_PATH = resolve(CURRENT_DIR, "./proto/enclave.proto");
 const MAX_GRPC_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_ENCLAVE_TARGET =
-  process.env.AGENT_ENCLAVE_TARGET ?? "unix:///tmp/kairos-runtime-enclave.sock";
+  process.env.AGENT_ENCLAVE_TARGET ??
+  process.env.KAIROS_ENCLAVE_SOCKET ??
+  "unix:///run/kairos-runtime/sockets/kairos-runtime-enclave.sock";
 
 interface CreateGrpcEnclaveClientOptions {
   target?: string;
@@ -26,6 +29,7 @@ interface GrpcStreamReplyRequest {
     role: string;
     content: string;
   }>;
+  image_urls: string[];
 }
 
 interface GrpcStreamReplyEvent {
@@ -82,6 +86,7 @@ function toGrpcRequest(request: StreamReplyRequest): GrpcStreamReplyRequest {
       role: item.role,
       content: item.content,
     })),
+    image_urls: request.imageUrls ?? [],
   };
 }
 
@@ -140,18 +145,43 @@ function mapGrpcEvent(event: GrpcStreamReplyEvent): EnclaveStreamEvent {
 async function* streamFromGrpc(
   client: GrpcServiceClient,
   request: StreamReplyRequest,
+  target: string,
   metadata?: grpc.Metadata
 ): AsyncGenerator<EnclaveStreamEvent, void, unknown> {
-  const call = client.StreamReply(toGrpcRequest(request), metadata);
-  try {
-    for await (const rawEvent of call as AsyncIterable<GrpcStreamReplyEvent>) {
-      yield mapGrpcEvent(rawEvent);
+  const maxRetries =
+    Number.parseInt(process.env.ENCLAVE_CONNECT_RETRIES ?? "120", 10) || 120;
+  const retryDelayMs =
+    Number.parseInt(process.env.ENCLAVE_CONNECT_RETRY_DELAY_MS ?? "500", 10) || 500;
+  const unixPath = parseUnixSocketPath(target);
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const call = client.StreamReply(toGrpcRequest(request), metadata);
+    let emittedAnyEvent = false;
+    try {
+      for await (const rawEvent of call as AsyncIterable<GrpcStreamReplyEvent>) {
+        emittedAnyEvent = true;
+        yield mapGrpcEvent(rawEvent);
+      }
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = !emittedAnyEvent && isRetryableEnclaveConnectError(message);
+      if (retryable && (attempt === 0 || attempt % 10 === 0)) {
+        const visible = unixPath ? existsSync(unixPath) : null;
+        console.warn(
+          `[state-daemon] enclave connect retry attempt=${attempt}/${maxRetries} target=${target} socket_visible=${visible}`
+        );
+      }
+      if (retryable && attempt < maxRetries) {
+        await sleep(retryDelayMs);
+        continue;
+      }
+      yield {
+        type: "failed",
+        error: `enclave grpc failed (target=${target}): ${message}`,
+      };
+      return;
     }
-  } catch (error) {
-    yield {
-      type: "failed",
-      error: error instanceof Error ? error.message : String(error),
-    };
   }
 }
 
@@ -168,7 +198,7 @@ export function createGrpcEnclaveClient(
   const metadata = toMetadata(options.metadata);
   return {
     streamReply: (request: StreamReplyRequest) =>
-      streamFromGrpc(client, request, metadata),
+      streamFromGrpc(client, request, target, metadata),
   };
 }
 
@@ -188,4 +218,31 @@ function normalizeGrpcTarget(target: string): string {
     return `unix://${normalized}`;
   }
   return normalized;
+}
+
+function isRetryableEnclaveConnectError(message: string): boolean {
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("enoent") ||
+    lowered.includes("eacces") ||
+    lowered.includes("econnrefused") ||
+    lowered.includes("unavailable") ||
+    lowered.includes("no connection established")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseUnixSocketPath(target: string): string | null {
+  if (target.startsWith("unix://")) {
+    const path = target.slice("unix://".length).trim();
+    return path.length > 0 ? path : null;
+  }
+  if (target.startsWith("unix:")) {
+    const path = target.slice("unix:".length).trim();
+    return path.length > 0 ? path : null;
+  }
+  return null;
 }

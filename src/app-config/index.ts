@@ -48,6 +48,10 @@ interface StateDaemonConfig {
     userbot?: UserBotConfig;
     ownerUserId: string;
   };
+  triggers: {
+    editedMessage: boolean;
+    privateChat: boolean;
+  };
   model: {
     llm: {
       ollama: {
@@ -82,6 +86,45 @@ interface LoadOptions {
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(CURRENT_DIR, "../..");
 const DEFAULT_CONFIG_ROOT = resolve(REPO_ROOT, ".runtime/appconfig");
+
+loadRootDotenv();
+
+function loadRootDotenv(): void {
+  const envPath = resolve(REPO_ROOT, ".env");
+  let raw: string;
+  try {
+    raw = readFileSync(envPath, "utf-8");
+  } catch {
+    return;
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const equalIdx = trimmed.indexOf("=");
+    if (equalIdx <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, equalIdx).trim();
+    if (!key || process.env[key] !== undefined) {
+      continue;
+    }
+    const rawValue = trimmed.slice(equalIdx + 1).trim();
+    process.env[key] = unquoteEnvValue(rawValue);
+  }
+}
+
+function unquoteEnvValue(value: string): string {
+  if (value.length >= 2) {
+    const quote = value[0];
+    if ((quote === "\"" || quote === "'") && value[value.length - 1] === quote) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
+}
 
 function normalizePath(input: string, repoRoot: string): string {
   return isAbsolute(input) ? input : resolve(repoRoot, input);
@@ -132,6 +175,21 @@ function requireString(value: unknown, path: string): string {
     throw new Error(`Missing required string at appconfig path "${path}".`);
   }
   return resolveEnvReference(value, path);
+}
+
+function resolveBoolean(value: unknown, path: string, fallback: boolean): boolean {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const resolved = resolveEnvReference(value, path).toLowerCase();
+    if (resolved === "true" || resolved === "1") return true;
+    if (resolved === "false" || resolved === "0") return false;
+  }
+  return fallback;
 }
 
 function resolveEnvReference(raw: string, path: string): string {
@@ -192,9 +250,10 @@ export function loadEnclaveRuntimeConfig(options: LoadOptions = {}): EnclaveRunt
   const apiKey =
     process.env.API_KEY ??
     process.env.QWEN_API_KEY ??
+    process.env.ENCLAVE_API_KEY ??
     requireString(llmConfig.apiKey, "enclaveRuntime.llm.apiKey");
-  const baseURL = process.env.BASE_URL ?? requireString(llmConfig.baseURL, "enclaveRuntime.llm.baseURL");
-  const model = process.env.MODEL ?? requireString(llmConfig.model, "enclaveRuntime.llm.model");
+  const baseURL = process.env.BASE_URL ?? process.env.ENCLAVE_BASE_URL ?? requireString(llmConfig.baseURL, "enclaveRuntime.llm.baseURL");
+  const model = process.env.MODEL ?? process.env.ENCLAVE_MODEL ?? requireString(llmConfig.model, "enclaveRuntime.llm.model");
   const enabledTools = process.env.ENABLED_TOOLS ?? requireString(toolsConfig.enabled, "enclaveRuntime.tools.enabled");
 
   if (process.env.MEMORY_FILES_ROOT) {
@@ -227,6 +286,7 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
   const stateConfig = requireObject(mergedFileConfig.stateDaemon, "stateDaemon");
   const grpcConfig = requireObject(stateConfig.grpc, "stateDaemon.grpc");
   const telegramConfig = requireObject(stateConfig.telegram, "stateDaemon.telegram");
+  const triggersConfig = isObject(stateConfig.triggers) ? stateConfig.triggers : {};
   const modelConfig = requireObject(stateConfig.model, "stateDaemon.model");
   const llmConfig = requireObject(modelConfig.llm, "stateDaemon.model.llm");
   const llmOllamaConfig = requireObject(llmConfig.ollama, "stateDaemon.model.llm.ollama");
@@ -235,10 +295,10 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
 
   const enclaveTarget =
     process.env.AGENT_ENCLAVE_TARGET ??
+    process.env.KAIROS_ENCLAVE_SOCKET ??
     requireString(grpcConfig.enclaveTarget, "stateDaemon.grpc.enclaveTarget");
-  const vfsTarget = process.env.MEMORY_VFS_TARGET ?? requireString(grpcConfig.vfsTarget, "stateDaemon.grpc.vfsTarget");
+  const vfsTarget = process.env.MEMORY_VFS_TARGET ?? process.env.KAIROS_VFS_SOCKET ?? requireString(grpcConfig.vfsTarget, "stateDaemon.grpc.vfsTarget");
   
-  // Telegram mode configuration
   const mode = (process.env.TELEGRAM_MODE ??
     requireString(telegramConfig.mode, "stateDaemon.telegram.mode")) as "bot" | "userbot";
   
@@ -249,11 +309,10 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
   const ownerUserId =
     process.env.OWNER_USER_ID ?? requireString(telegramConfig.ownerUserId, "stateDaemon.telegram.ownerUserId");
   
-  // Build telegram config based on mode
   let telegramResult: StateDaemonConfig["telegram"];
   
   if (mode === "userbot") {
-    const userbotConfig = requireObject(telegramConfig.userbot, "stateDaemon.telegram.userbot");
+    const userbotConfig = isObject(telegramConfig.userbot) ? telegramConfig.userbot : {};
     const apiId = parseInt(
       process.env.TELEGRAM_API_ID ?? requireString(userbotConfig.apiId, "stateDaemon.telegram.userbot.apiId"),
       10
@@ -282,6 +341,7 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
       ownerUserId,
     };
   }
+
   const llmOllamaBaseUrl =
     process.env.OLLAMA_BASE_URL ??
     requireString(llmOllamaConfig.baseUrl, "stateDaemon.model.llm.ollama.baseUrl");
@@ -290,14 +350,17 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
     requireString(llmOllamaConfig.model, "stateDaemon.model.llm.ollama.model");
   const llmCloudApiKey =
     process.env.STATE_DAEMON_CLOUD_API_KEY ??
+    process.env.CLOUD_API_KEY ??
     process.env.ARK_API_KEY ??
     process.env.API_KEY ??
     requireString(llmCloudConfig.apiKey, "stateDaemon.model.llm.cloud.apiKey");
   const llmCloudBaseURL =
     process.env.STATE_DAEMON_CLOUD_BASE_URL ??
+    process.env.CLOUD_BASE_URL ??
     requireString(llmCloudConfig.baseURL, "stateDaemon.model.llm.cloud.baseURL");
   const llmCloudModel =
     process.env.STATE_DAEMON_CLOUD_MODEL ??
+    process.env.CLOUD_MODEL ??
     requireString(llmCloudConfig.model, "stateDaemon.model.llm.cloud.model");
   const embeddingProvider = (
     process.env.EMBED_PROVIDER ??
@@ -326,6 +389,10 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
       vfsTarget,
     },
     telegram: telegramResult,
+    triggers: {
+      editedMessage: resolveBoolean(triggersConfig.editedMessage, "stateDaemon.triggers.editedMessage", true),
+      privateChat: resolveBoolean(triggersConfig.privateChat, "stateDaemon.triggers.privateChat", true),
+    },
     model: {
       llm: {
         ollama: {

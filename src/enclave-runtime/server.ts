@@ -1,7 +1,7 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { loadEnclaveRuntimeConfig } from "@kairos-runtime/app-config";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LLMMessage } from "./agent/core/openai";
@@ -82,6 +82,7 @@ function buildEnabledTools(enabledToolNames: Set<string>) {
 interface GrpcStreamReplyRequest {
   chat_id?: string;
   messages?: Array<{ role?: string; content?: string }>;
+  image_urls?: string[];
 }
 
 interface GrpcStreamReplyEvent {
@@ -259,7 +260,8 @@ server.addService(service, {
     try {
       const request = call.request;
       const messages = sanitizeMessages(request.messages);
-      for await (const event of enclaveRuntime.streamEvents(messages)) {
+      const imageUrls = (request.image_urls ?? []).filter((url: string) => url);
+      for await (const event of enclaveRuntime.streamEvents(messages, { imageUrls })) {
         const grpcEvent = toGrpcEvent(event);
         if (!safeWrite(call, grpcEvent)) {
           break;
@@ -300,6 +302,19 @@ function prepareUnixSocket(addr: string): void {
   }
 }
 
+function ensureUnixSocketPermissions(addr: string): void {
+  const socketPath = parseUnixSocketPath(addr);
+  if (!socketPath || !existsSync(socketPath)) {
+    return;
+  }
+  try {
+    // Allow host non-root client process to connect to sandbox-created socket.
+    chmodSync(socketPath, 0o666);
+  } catch (error) {
+    console.warn("[enclave] failed to chmod unix socket:", error);
+  }
+}
+
 prepareUnixSocket(DEFAULT_BIND_ADDR);
 
 server.bindAsync(
@@ -310,6 +325,7 @@ server.bindAsync(
       console.error("[enclave] failed to bind grpc server:", error);
       process.exit(1);
     }
+    ensureUnixSocketPermissions(DEFAULT_BIND_ADDR);
     console.log(`[enclave] grpc server listening on ${DEFAULT_BIND_ADDR}`);
   }
 );

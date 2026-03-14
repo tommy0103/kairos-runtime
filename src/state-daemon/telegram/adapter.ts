@@ -5,6 +5,7 @@ import type {
   TelegramConversationType,
   TelegramMessage,
 } from "./types";
+import { markdownToTelegramHtml } from "./markdownToHtml";
 
 const DEFAULT_PLACEHOLDER = "小猫正在玩毛线球...";
 const DEFAULT_FINAL_TEXT = "(空内容)";
@@ -21,6 +22,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     {
       ctx: Context;
       photoCount: number;
+      photoFileIds: string[];
       timer: ReturnType<typeof setTimeout>;
     }
   >();
@@ -105,27 +107,35 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     }
 
     const finalText = state.chunks.join("") || DEFAULT_FINAL_TEXT;
-    const escapedFinalText = escapeText(finalText);
+
     try {
-      const finalMessage = await retry(
-        async () => {
-          return await bot.api.editMessageText(
+      let finalMessage;
+      try {
+        const htmlText = markdownToTelegramHtml(finalText);
+        finalMessage = await retry(
+          () => bot.api.editMessageText(
             state.chatId,
             state.placeholderMessageId,
-            escapedFinalText,
-            {
-              parse_mode: "MarkdownV2"
-            }
-          );
-        },
-        EDIT_RETRY_ATTEMPTS,
-        EDIT_RETRY_DELAY_MS
-      );
-      // console.log("finalMessage", finalMessage);
-      // console.log("state", state);
+            htmlText,
+            { parse_mode: "HTML" }
+          ),
+          EDIT_RETRY_ATTEMPTS,
+          EDIT_RETRY_DELAY_MS
+        );
+      } catch {
+        console.warn("HTML formatting failed, falling back to plain text");
+        finalMessage = await retry(
+          () => bot.api.editMessageText(
+            state.chatId,
+            state.placeholderMessageId,
+            finalText,
+          ),
+          EDIT_RETRY_ATTEMPTS,
+          EDIT_RETRY_DELAY_MS
+        );
+      }
+
       const outgoing = toEditedResultMessage(finalMessage, state, finalText);
-      // console.log("state", state);
-      // console.log("outgoing", outgoing);
       if (outgoing) {
         dispatchMessage(outgoing);
       }
@@ -149,7 +159,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     };
   };
 
-  const flushMediaGroup = (key: string) => {
+  const flushMediaGroup = async (key: string) => {
     const pending = pendingMediaGroups.get(key);
     if (!pending) {
       return;
@@ -160,6 +170,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     if (!message) {
       return;
     }
+    message.imageUrls = await resolvePhotoUrlsByFileIds(pending.photoFileIds, bot, token);
     dispatchMessage(message);
   };
 
@@ -173,7 +184,9 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
       return;
     }
     const key = `${chatId}:${mediaGroupId}`;
-    const hasPhoto = (message.photo?.length ?? 0) > 0;
+    const photos = message.photo;
+    const hasPhoto = (photos?.length ?? 0) > 0;
+    const largestFileId = hasPhoto ? photos![photos!.length - 1].file_id : undefined;
     const incomingContext =
       "text" in message ? (message.text ?? "") : (message.caption ?? "");
     const pending = pendingMediaGroups.get(key);
@@ -185,6 +198,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
       pendingMediaGroups.set(key, {
         ctx,
         photoCount: hasPhoto ? 1 : 0,
+        photoFileIds: largestFileId ? [largestFileId] : [],
         timer,
       });
       return;
@@ -192,6 +206,9 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
 
     clearTimeout(pending.timer);
     pending.photoCount += hasPhoto ? 1 : 0;
+    if (largestFileId) {
+      pending.photoFileIds.push(largestFileId);
+    }
     const pendingMessage = pending.ctx.message;
     const pendingContext = pendingMessage
       ? ("text" in pendingMessage
@@ -219,6 +236,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
       return;
     }
 
+    message.imageUrls = await resolvePhotoUrls(ctx.message?.photo, bot, token);
     dispatchMessage(message);
 
     await next();
@@ -415,13 +433,12 @@ function toOptionalMessageId(messageId?: number | string): number | undefined {
 }
 
 function isMentionMe(ctx: Context): boolean {
-//   const text = ctx.msg.text ?? "";
-    const message = ctx.msg;
-    if (!message) {
-        return false;
-    }
-    const text = message.text ?? "";
-    return text.includes(`@${ctx.me.username}`);
+  const message = ctx.msg;
+  if (!message) {
+    return false;
+  }
+  const text = message.text ?? message.caption ?? "";
+  return text.includes(`@${ctx.me.username}`);
 }
 
 function isMentionMeEdited(ctx: Context): boolean {
@@ -429,13 +446,20 @@ function isMentionMeEdited(ctx: Context): boolean {
   if (!message) {
     return false;
   }
-  const text = "text" in message ? (message.text ?? "") : "";
+  const text = message.text ?? message.caption ?? "";
   return text.includes(`@${ctx.me.username}`);
 }
 
 function extractMentions(message: NonNullable<Context["message"]>): string[] {
-  const text = "text" in message ? (message.text ?? "") : "";
-  return extractMentionsFromTextWithEntities(text, message.entities);
+  const textMentions = extractMentionsFromTextWithEntities(
+    message.text ?? "",
+    message.entities
+  );
+  const captionMentions = extractMentionsFromTextWithEntities(
+    message.caption ?? "",
+    message.caption_entities
+  );
+  return Array.from(new Set([...textMentions, ...captionMentions]));
 }
 
 function extractMentionsFromTextWithEntities(
@@ -505,27 +529,34 @@ function isRetryableNetworkError(error: unknown): boolean {
   );
 }
 
-function escapeText(text: string): string {
-  const escapeMarkdownV2 = (value: string): string =>
-    value.replace(/[\\_*\[\]()~>#+\-=|{}.!]/g, "\\$&");
-  const escapeMarkdownV2Url = (value: string): string =>
-    value.replace(/[\\)]/g, "\\$&");
-  const placeholders: string[] = [];
-
-  const protectedText = text.replace(
-    /\[([^\]\n]+)\]\(([^)\n]+)\)/g,
-    (_, label: string, url: string) => {
-      const token = `\u0000LINK${placeholders.length}\u0000`;
-      const escapedLabel = escapeMarkdownV2(label);
-      const escapedUrl = escapeMarkdownV2Url(url);
-      placeholders.push(`[${escapedLabel}](${escapedUrl})`);
-      return token;
-    }
-  );
-
-  const escaped = escapeMarkdownV2(protectedText);
-  return escaped.replace(/\u0000LINK(\d+)\u0000/g, (_, indexText: string) => {
-    const index = Number(indexText);
-    return placeholders[index] ?? "";
-  });
+async function resolvePhotoUrls(
+  photos: ReadonlyArray<{ file_id: string }> | undefined,
+  bot: Bot,
+  token: string
+): Promise<string[]> {
+  if (!photos?.length) {
+    return [];
+  }
+  const largest = photos[photos.length - 1];
+  return resolvePhotoUrlsByFileIds([largest.file_id], bot, token);
 }
+
+async function resolvePhotoUrlsByFileIds(
+  fileIds: string[],
+  bot: Bot,
+  token: string
+): Promise<string[]> {
+  const urls: string[] = [];
+  for (const fileId of fileIds) {
+    try {
+      const file = await bot.api.getFile(fileId);
+      if (file.file_path) {
+        urls.push(`https://api.telegram.org/file/bot${token}/${file.file_path}`);
+      }
+    } catch (error) {
+      console.error("resolvePhotoUrl failed for fileId:", fileId, error);
+    }
+  }
+  return urls;
+}
+

@@ -1,9 +1,26 @@
-# [Project Name]
+<div align="center">
+  <img src="./assets/logo.png" alt="Memoh" width="100" height="100">
+  <h1>Kairos-Runtime</h1>
+  <p>An agent runtime that treats context, execution, and permissions as OS primitives — not LLM problems.</p>
 
-> An agent runtime that treats context, execution, and permissions as OS primitives — not LLM problems.
+  <p>📌 <a href="./docs/brand/001-logo.md">Logo Design Philosophy</a></p>
+
+  <div align="center">
+    <img src="https://img.shields.io/github/package-json/v/tommy0103/kairos-runtime" alt="Version" />
+    <img src="https://img.shields.io/github/license/tommy0103/kairos-runtime" alt="License" />
+    <img src="https://img.shields.io/github/stars/tommy0103/kairos-runtime?style=social" alt="Stars" />
+    <img src="https://img.shields.io/github/forks/tommy0103/kairos-runtime?style=social" alt="Forks" />
+    <img src="https://img.shields.io/github/last-commit/tommy0103/kairos-runtime" alt="Last Commit" />
+    <img src="https://img.shields.io/github/issues/tommy0103/kairos-runtime" alt="Issues" />
+  </div>
+  <hr>
+</div>
+
 
 > Like light — particle and wave, yet neither classical.  
 > OS primitives. Agent-centered. Neither, in the classical sense.
+
+## A short story
 
 My friend's framework was querying 100k tokens per request. Every message. Every time. I thought there had to be a better way.
 
@@ -129,6 +146,36 @@ your host libc is compatible with container runtime.
 docker compose up --build app
 ```
 
+### Common UDS troubleshooting (`state-daemon` -> `enclave-runtime`):
+
+- Symptom: socket file exists but client still fails (`ENOENT`, `EACCES`, or `UNAVAILABLE`).
+- Check target consistency first:
+  - `state-daemon` target (`AGENT_ENCLAVE_TARGET`)
+  - sandbox listen addr (`ENCLAVE_LISTEN`)
+- Verify socket visibility and permissions on host:
+
+```bash
+ls -l /run/kairos-runtime/sockets/kairos-runtime-enclave.sock
+lsof -U /run/kairos-runtime/sockets/kairos-runtime-enclave.sock
+```
+
+- In containerd sandbox mode, prefer a dedicated socket directory such as `/run/kairos-runtime/sockets` instead of exposing `/tmp`.
+- Enclave may create the UDS as `root`; host non-root clients can fail to connect if permissions are too strict.
+- Current runtime sets socket mode to `666` after bind to avoid host/client user mismatch.
+
+### Run sandboxd on host (without Docker)
+
+```bash
+bash scripts/run-sandbox-host.sh --dry-run
+# or:
+bash scripts/run-sandbox-host.sh --release
+
+# at another terminal, run:
+OLLAMA_BASE_URL="http://127.0.0.1:11434" bun run src/state-daemon/dev
+# at another terminal, run:
+cargo run --manifest-path src/vfs/Cargo.toml
+```
+
 Run `sandboxd` in Docker as well:
 
 ```bash
@@ -144,4 +191,6 @@ Notes:
 
 ## License
 
-MIT
+LICENSE: AGPLv3
+
+Copyright (C) 2026 kairos-runtime. All rights reserved.

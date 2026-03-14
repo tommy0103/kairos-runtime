@@ -39,6 +39,7 @@ pub fn prepare_socket_mountpoint(path: &Path) -> io::Result<()> {
         Err(err) => return Err(err),
     }
 
-    std::fs::File::create(path)?;
+    // Do not pre-create socket file.
+    // The producer process (inside or outside container) should create it by bind/listen.
     Ok(())
 }

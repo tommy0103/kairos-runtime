@@ -17,6 +17,7 @@ export interface CreateMessageGatewayOptions {
   policies: GatewayTriggerPolicy[];
   userRoles?: UserRolesStore;
   mergeWindowMs?: number;
+  enableEditedMessageTrigger?: boolean;
 }
 
 export interface MessageGateway {
@@ -107,12 +108,31 @@ export function createMessageGateway(
     }
   };
 
+  const triggeredMessageIds = new Set<number>();
+
   const normalizer = createEventNormalizer({
     mergeWindowMs: options.mergeWindowMs,
     onUpsert: (message) => {
       return recordNormalizedMessage(message);
     },
   });
+
+  const flushRecordAndTrigger = async (
+    rawMessage: TelegramMessage,
+    decision: TriggerDecision
+  ) => {
+    const flushed = normalizer.flushChatBefore(rawMessage.chatId, rawMessage.timestamp);
+    for (const message of flushed) {
+      await recordNormalizedMessage(message);
+    }
+
+    const triggerMessage =
+      flushed.find((message) => message.messageId === rawMessage.messageId) ?? rawMessage;
+    if (!flushed.some((message) => message.messageId === triggerMessage.messageId)) {
+      await recordNormalizedMessage(triggerMessage);
+    }
+    await handleTriggerMessage(triggerMessage, decision);
+  };
 
   const unsubscribe = options.telegram.onMessage((rawMessage) => {
     normalizer.ingestMessage(rawMessage);
@@ -122,25 +142,36 @@ export function createMessageGateway(
       if (!decision.shouldTrigger || !decision.prompt) {
         return;
       }
-
-      const flushed = normalizer.flushChatBefore(rawMessage.chatId, rawMessage.timestamp);
-      // console.log("flushed", flushed);
-      for (const message of flushed) {
-        await recordNormalizedMessage(message);
-      }
-
-      const triggerMessage =
-        flushed.find((message) => message.messageId === rawMessage.messageId) ?? rawMessage;
-      if (!flushed.some((message) => message.messageId === triggerMessage.messageId)) {
-        await recordNormalizedMessage(triggerMessage);
-      }
-      await handleTriggerMessage(triggerMessage, decision);
+      triggeredMessageIds.add(rawMessage.messageId);
+      await flushRecordAndTrigger(rawMessage, decision);
     })().catch((error) => {
       console.error("message gateway handler failed:", error);
     });
   });
+  const enableEditedTrigger = options.enableEditedMessageTrigger !== false;
   const unsubscribeEdited = options.telegram.onEditedMessage((editedMessage) => {
     normalizer.ingestEditedMessage(editedMessage);
+
+    if (!enableEditedTrigger) {
+      return;
+    }
+    if (triggeredMessageIds.has(editedMessage.messageId)) {
+      return;
+    }
+
+    void (async () => {
+      const decision = await pickDecision(policies, editedMessage, context);
+      if (!decision.shouldTrigger || !decision.prompt) {
+        return;
+      }
+      if (triggeredMessageIds.has(editedMessage.messageId)) {
+        return;
+      }
+      triggeredMessageIds.add(editedMessage.messageId);
+      await flushRecordAndTrigger(editedMessage, decision);
+    })().catch((error) => {
+      console.error("message gateway edited handler failed:", error);
+    });
   });
 
   return {

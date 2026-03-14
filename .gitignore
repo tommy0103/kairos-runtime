@@ -43,9 +43,10 @@ package-lock.json
 **/*.bun
 
 # memory files
-src/.runtime/memory_files/*
-!src/.runtime/memory_files/Soul.md
-
+# src/.runtime/memory_files/*
+# !src/.runtime/memory_files/Soul.md
+.runtime/memory_files/*
+!.runtime/memory_files/Soul.md
 
 # dev docs
 .dev.docs

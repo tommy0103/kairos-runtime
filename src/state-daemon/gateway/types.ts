@@ -7,7 +7,7 @@ export interface GatewayContext {
   runtime: ClientRuntime;
 }
 
-export type TriggerReason = "mention_me" | "reply_to_me" | "none";
+export type TriggerReason = "mention_me" | "reply_to_me" | "private_chat" | "none";
 
 export interface TriggerDecision {
   shouldTrigger: boolean;

@@ -72,7 +72,11 @@ export function createMemoryVfsClient(options?: CreateMemoryVfsClientOptions): M
 }
 
 function getDefaultMemoryVfsTarget(): string {
-  return process.env.MEMORY_VFS_TARGET ?? "/tmp/kairos-runtime-vfs.sock";
+  return (
+    process.env.MEMORY_VFS_TARGET ??
+    process.env.KAIROS_VFS_SOCKET ??
+    "unix:///run/kairos-runtime/sockets/kairos-runtime-vfs.sock"
+  );
 }
 
 function normalizeGrpcTarget(target: string): string {

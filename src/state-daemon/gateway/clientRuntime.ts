@@ -113,6 +113,7 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
         for await (const event of enclaveClient.streamReply({
           chatId: triggerMessage.chatId,
           messages: llmMessages,
+          imageUrls: triggerMessage.imageUrls,
         })) {
           if (event.type === "message_update" && event.role === "assistant" && event.delta) {
             stream.push(event.delta);
