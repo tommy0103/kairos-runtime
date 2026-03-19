@@ -7,7 +7,6 @@ import type {
 } from "./types";
 import { markdownToTelegramHtml } from "./markdownToHtml";
 
-const DEFAULT_PLACEHOLDER = "小猫正在玩毛线球...";
 const DEFAULT_FINAL_TEXT = "(空内容)";
 const EDIT_RETRY_ATTEMPTS = 3;
 const EDIT_RETRY_DELAY_MS = 500;
@@ -33,6 +32,15 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   const editedMessageHandlers = new Set<
     (message: TelegramMessage) => void | Promise<void>
   >();
+
+  const setTyping = async (chatId: number) => {
+    try {
+      await bot.api.sendChatAction(chatId, "typing");
+    } catch (e) {
+      // 忽略设置状态失败
+    }
+  };
+
   const sendMessage = (
     chatId: number,
     text: string,
@@ -75,17 +83,12 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   const startStream: TelegramAdapter["startStream"] = async (
     chatId,
     messageId,
-    // placeholder = DEFAULT_PLACEHOLDER,
   ) => {
-    // const sent = await sendMessage(chatId, placeholder, messageId);
+    // 设置原生正在输入状态
+    void setTyping(chatId);
     const streamId = nextStreamId++;
     streams.set(streamId, {
       chatId,
-      // placeholderMessageId: sent.message_id,
-      // conversationType: toConversationType(sent.chat.type),
-      // username: sent.from?.username ?? null,
-      // replyToMessageId: sent.reply_to_message?.message_id ?? null,
-      // replyToUserId: sent.reply_to_message?.from?.id?.toString() ?? null,
       conversationType: "private",
       username: null,
       replyToMessageId: messageId ?? null,
@@ -102,6 +105,8 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
       throw new Error(`stream not started for streamId: ${streamId}`);
     }
     state.chunks.push(chunk);
+    // 每收到 5 个 chunk 刷新一次 typing 状态
+    if (state.chunks.length % 5 === 0) void setTyping(state.chatId);
   };
 
   const endStream: TelegramAdapter["endStream"] = async (streamId) => {
@@ -113,44 +118,11 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     const finalText = state.chunks.join("") || DEFAULT_FINAL_TEXT;
 
     try {
-      // Send as new message instead of editing placeholder
       const sent = await sendMessage(state.chatId, finalText, state.replyToMessageId ?? undefined);
       const outgoing = toOutgoingTelegramMessage(sent);
       if (outgoing) {
         dispatchMessage(outgoing);
       }
-
-      // Original edit-based approach (commented out):
-      // let finalMessage;
-      // try {
-      //   const htmlText = markdownToTelegramHtml(finalText);
-      //   finalMessage = await retry(
-      //     () => bot.api.editMessageText(
-      //       state.chatId,
-      //       state.placeholderMessageId,
-      //       htmlText,
-      //       { parse_mode: "HTML" }
-      //     ),
-      //     EDIT_RETRY_ATTEMPTS,
-      //     EDIT_RETRY_DELAY_MS
-      //   );
-      // } catch {
-      //   console.warn("HTML formatting failed, falling back to plain text");
-      //   finalMessage = await retry(
-      //     () => bot.api.editMessageText(
-      //       state.chatId,
-      //       state.placeholderMessageId,
-      //       finalText,
-      //     ),
-      //     EDIT_RETRY_ATTEMPTS,
-      //     EDIT_RETRY_DELAY_MS
-      //   );
-      // }
-      // const outgoing = toEditedResultMessage(finalMessage, state, finalText);
-      // if (outgoing) {
-      //   dispatchMessage(outgoing);
-      // }
-
       return finalText;
     } finally {
       streams.delete(streamId);
@@ -571,4 +543,3 @@ async function resolvePhotoUrlsByFileIds(
   }
   return urls;
 }
-

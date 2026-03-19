@@ -3,7 +3,6 @@ import { StringSession } from "telegram/sessions";
 import { NewMessage } from "telegram/events";
 import type { TelegramAdapter, TelegramMessage, StreamState } from "./types";
 
-const DEFAULT_PLACEHOLDER = "小猫正在玩毛线球...";
 const DEFAULT_FINAL_TEXT = "(空内容)";
 
 export function createUserBotAdapter(options: any): TelegramAdapter {
@@ -22,6 +21,18 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     }
     try { return await client.getEntity(BigInt(id)); } catch {}
     throw new Error("Could not find entity for " + id);
+  };
+
+  const setTyping = async (chatId: any) => {
+    try {
+      const target = await getSafeEntity(chatId);
+      await client.invoke(new Api.messages.SetTyping({
+        peer: target,
+        action: new Api.SendMessageTypingAction(),
+      }));
+    } catch (e) {
+      // 忽略设置状态失败的情况
+    }
   };
 
   const toTelegramMessage = (msg: Api.Message): TelegramMessage | null => {
@@ -72,21 +83,42 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       const sent = await client.sendMessage(target, { message: text, replyTo: messageId });
       if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
     },
-    startStream: async (chatId, messageId, placeholder = DEFAULT_PLACEHOLDER) => {
-      const target = await getSafeEntity(chatId);
-      const sent = await client.sendMessage(target, { message: placeholder, replyTo: messageId });
-      if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
+    startStream: async (chatId, messageId) => {
+      // 不再发送占位符消息，只设置正在输入状态
+      void setTyping(chatId);
       const streamId = nextStreamId++;
-      streams.set(streamId, { chatId, placeholderMessageId: sent.id, conversationType: "group", username: null, replyToMessageId: messageId || null, replyToUserId: null, chunks: [] });
+      streams.set(streamId, { 
+        chatId, 
+        placeholderMessageId: 0, // 不再使用
+        conversationType: "group", 
+        username: null, 
+        replyToMessageId: messageId || null, 
+        replyToUserId: null, 
+        chunks: [] 
+      });
       return streamId;
     },
-    appendStream: (id, c) => streams.get(id)?.chunks.push(c),
+    appendStream: (id, c) => {
+      const s = streams.get(id);
+      if (s) {
+        s.chunks.push(c);
+        // 每收到 5 个 chunk 刷新一次 typing 状态（TG 状态通常 5 秒消失）
+        if (s.chunks.length % 5 === 0) void setTyping(s.chatId);
+      }
+    },
     endStream: async (id) => {
       const s = streams.get(id);
       if (!s) return "";
       const text = s.chunks.join("") || DEFAULT_FINAL_TEXT;
       const target = await getSafeEntity(s.chatId);
-      await client.editMessage(target, { message: s.placeholderMessageId, text }).catch(e => console.error(e));
+      
+      // 直接发送新消息，而不是编辑占位符
+      const sent = await client.sendMessage(target, { 
+        message: text, 
+        replyTo: s.replyToMessageId || undefined 
+      });
+      if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
+      
       streams.delete(id);
       return text;
     }
