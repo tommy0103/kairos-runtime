@@ -13,10 +13,12 @@ const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
 // 社交礼仪配置
 const ETIQUETTE_CONFIG = {
-  decayFactor: 0.6, // 机器人之间对话的热情衰减系数
-  recoveryTimeMs: 10 * 60 * 1000, // 10 分钟恢复到 100% 热情
-  minHeat: 0.1, // 最低保留 10% 的概率（留点火种）
+  decayFactor: 0.7, // 机器人之间对话的热情衰减系数
+  recoveryTimeMs: 15 * 60 * 1000, // 15 分钟恢复到 100% 热情
+  minHeat: 0.1, 
 };
+
+type SocialState = "NORMAL" | "CONCISE" | "WRAP_UP";
 
 class SocialEtiquetteManager {
   private heatMap = new Map<number, { heat: number; lastUpdate: number }>();
@@ -36,10 +38,9 @@ class SocialEtiquetteManager {
     let currentHeat = this.getHeat(chatId);
     
     if (isBotInteraction) {
-      // 机器人对话，热情度降低
       currentHeat = currentHeat * ETIQUETTE_CONFIG.decayFactor;
     } else {
-      // 人类对话，热情度立即重置
+      // 真人消息直接重置热度
       currentHeat = 1.0;
     }
 
@@ -49,15 +50,24 @@ class SocialEtiquetteManager {
     });
   }
 
-  shouldRespond(chatId: number, isBotInteraction: boolean): { allowed: boolean; heat: number } {
-    if (!isBotInteraction) return { allowed: true, heat: 1.0 };
+  getSocialState(chatId: number, isBotInteraction: boolean): SocialState {
+    if (!isBotInteraction) return "NORMAL";
     
     const heat = this.getHeat(chatId);
-    const random = Math.random();
-    const allowed = random < heat;
-    
-    console.log(`[etiquette] chat=${chatId} isBot=true heat=${heat.toFixed(2)} roll=${random.toFixed(2)} result=${allowed}`);
-    return { allowed, heat };
+    if (heat > 0.7) return "NORMAL";
+    if (heat > 0.4) return "CONCISE";
+    return "WRAP_UP";
+  }
+
+  getInstruction(state: SocialState): string {
+    switch (state) {
+      case "CONCISE":
+        return "\n\n【系统提示：当前对话已持续较久，请精简你的回答，避免展开复杂话题。】";
+      case "WRAP_UP":
+        return "\n\n【系统提示：当前对话已过长。请礼貌地找个借口结束本次对话（例如：要去忙了、去休息了等），不要再引导对方继续聊下去。】";
+      default:
+        return "";
+    }
   }
 }
 
@@ -106,7 +116,6 @@ export function createMessageGateway(
   ) => {
     console.log("handleMessage", message);
 
-    // blocked users get recorded but never trigger agent
     if (options.userRoles?.isBlocked(message.userId)) {
       if (decision.shouldTrigger) {
         await options.telegram.reply(message.chatId, BLOCKED_REPLY, message.messageId);
@@ -118,19 +127,14 @@ export function createMessageGateway(
       return;
     }
 
-    // 社交礼仪检查：如果是来自 Bot 的触发，判定概率
-    const isBotInteraction = message.metadata.isBot || message.metadata.isReplyToMe; // 简单判定：如果是回复我也按互动算
-    const etiquette = etiquetteManager.shouldRespond(message.chatId, isBotInteraction);
+    // 社交礼仪处理
+    const isBotInteraction = message.metadata.isBot === true;
+    const socialState = etiquetteManager.getSocialState(message.chatId, isBotInteraction);
+    const instruction = etiquetteManager.getInstruction(socialState);
     
-    if (!etiquette.allowed) {
-      console.log(`[etiquette] skipped response to bot-like user ${message.userId} in chat ${message.chatId} (heat too low)`);
-      return;
-    }
-
-    // 确定要回复，更新热度
+    // 更新热度（在生成前更新，以便下一次消息能看到最新的热度）
     etiquetteManager.updateHeat(message.chatId, isBotInteraction);
 
-    // console.log("streamMessage", message);
     const streamMessageId = await options.telegram.startStream(
       message.chatId,
       message.messageId
@@ -140,7 +144,8 @@ export function createMessageGateway(
       let hasOutput = false;
       for await (const chunk of options.runtime.streamReply({
         triggerMessage: message,
-        prompt: decision.prompt,
+        // 将社交指令注入 Prompt
+        prompt: decision.prompt + instruction,
       })) {
         console.log("append stream", chunk);
         options.telegram.appendStream(streamMessageId, chunk);
@@ -157,7 +162,6 @@ export function createMessageGateway(
       try {
         options.telegram.appendStream(streamMessageId, "\n(生成失败，请稍后重试)");
       } catch {
-        // Stream may already be closed; ignore append failure.
       }
       try {
         await options.telegram.endStream(streamMessageId);
