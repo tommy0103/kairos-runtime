@@ -75,17 +75,21 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   const startStream: TelegramAdapter["startStream"] = async (
     chatId,
     messageId,
-    placeholder = DEFAULT_PLACEHOLDER,
+    // placeholder = DEFAULT_PLACEHOLDER,
   ) => {
-    const sent = await sendMessage(chatId, placeholder, messageId);
+    // const sent = await sendMessage(chatId, placeholder, messageId);
     const streamId = nextStreamId++;
     streams.set(streamId, {
       chatId,
-      placeholderMessageId: sent.message_id,
-      conversationType: toConversationType(sent.chat.type),
-      username: sent.from?.username ?? null,
-      replyToMessageId: sent.reply_to_message?.message_id ?? null,
-      replyToUserId: sent.reply_to_message?.from?.id?.toString() ?? null,
+      // placeholderMessageId: sent.message_id,
+      // conversationType: toConversationType(sent.chat.type),
+      // username: sent.from?.username ?? null,
+      // replyToMessageId: sent.reply_to_message?.message_id ?? null,
+      // replyToUserId: sent.reply_to_message?.from?.id?.toString() ?? null,
+      conversationType: "private",
+      username: null,
+      replyToMessageId: messageId ?? null,
+      replyToUserId: null,
       chunks: [],
     });
     console.log("startStream", streams.get(streamId));
@@ -109,36 +113,44 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     const finalText = state.chunks.join("") || DEFAULT_FINAL_TEXT;
 
     try {
-      let finalMessage;
-      try {
-        const htmlText = markdownToTelegramHtml(finalText);
-        finalMessage = await retry(
-          () => bot.api.editMessageText(
-            state.chatId,
-            state.placeholderMessageId,
-            htmlText,
-            { parse_mode: "HTML" }
-          ),
-          EDIT_RETRY_ATTEMPTS,
-          EDIT_RETRY_DELAY_MS
-        );
-      } catch {
-        console.warn("HTML formatting failed, falling back to plain text");
-        finalMessage = await retry(
-          () => bot.api.editMessageText(
-            state.chatId,
-            state.placeholderMessageId,
-            finalText,
-          ),
-          EDIT_RETRY_ATTEMPTS,
-          EDIT_RETRY_DELAY_MS
-        );
-      }
-
-      const outgoing = toEditedResultMessage(finalMessage, state, finalText);
+      // Send as new message instead of editing placeholder
+      const sent = await sendMessage(state.chatId, finalText, state.replyToMessageId ?? undefined);
+      const outgoing = toOutgoingTelegramMessage(sent);
       if (outgoing) {
         dispatchMessage(outgoing);
       }
+
+      // Original edit-based approach (commented out):
+      // let finalMessage;
+      // try {
+      //   const htmlText = markdownToTelegramHtml(finalText);
+      //   finalMessage = await retry(
+      //     () => bot.api.editMessageText(
+      //       state.chatId,
+      //       state.placeholderMessageId,
+      //       htmlText,
+      //       { parse_mode: "HTML" }
+      //     ),
+      //     EDIT_RETRY_ATTEMPTS,
+      //     EDIT_RETRY_DELAY_MS
+      //   );
+      // } catch {
+      //   console.warn("HTML formatting failed, falling back to plain text");
+      //   finalMessage = await retry(
+      //     () => bot.api.editMessageText(
+      //       state.chatId,
+      //       state.placeholderMessageId,
+      //       finalText,
+      //     ),
+      //     EDIT_RETRY_ATTEMPTS,
+      //     EDIT_RETRY_DELAY_MS
+      //   );
+      // }
+      // const outgoing = toEditedResultMessage(finalMessage, state, finalText);
+      // if (outgoing) {
+      //   dispatchMessage(outgoing);
+      // }
+
       return finalText;
     } finally {
       streams.delete(streamId);

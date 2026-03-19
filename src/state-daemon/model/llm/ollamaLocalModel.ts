@@ -1,4 +1,5 @@
 import type { LocalModel, LocalModelCompleteInput, LocalModelCompleteOutput } from "./types";
+import { createLlmFetcher } from "../../../utils/llm-adapter";
 
 export interface CreateOllamaLocalModelOptions {
   baseUrl?: string;
@@ -23,6 +24,8 @@ export function createOllamaLocalModel(
   const model =
     options.model ?? process.env.OLLAMA_SESSION_MODEL ?? DEFAULT_MODEL;
 
+  const fetcher = createLlmFetcher({ baseURL: baseUrl });
+
   return {
     async complete(input: LocalModelCompleteInput): Promise<LocalModelCompleteOutput> {
       const { prompt } = input;
@@ -30,22 +33,12 @@ export function createOllamaLocalModel(
         throw new Error("Ollama local model does not support attachments yet.");
       }
 
-      const response = await fetch(`${baseUrl}/api/generate`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model,
-          prompt,
-          stream: false,
-        }),
-      });
+      const data = await fetcher("/api/generate", {
+        model,
+        prompt,
+        stream: false,
+      }) as OllamaGenerateResponse;
 
-      if (!response.ok) {
-        const reason = await response.text().catch(() => "");
-        throw new Error(`Ollama generate failed (${response.status}): ${reason}`);
-      }
-
-      const data = (await response.json()) as OllamaGenerateResponse;
       const text = typeof data.response === "string" ? data.response : "";
       return { text };
     },

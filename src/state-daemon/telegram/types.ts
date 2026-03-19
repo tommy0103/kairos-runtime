@@ -6,7 +6,7 @@ export type { TelegramConversationType, TelegramMessage };
 
 export interface StreamState {
   chatId: number;
-  placeholderMessageId: number;
+  // placeholderMessageId: number;  // Commented out: no longer sending placeholder
   conversationType: TelegramConversationType;
   username: string | null;
   replyToMessageId: number | null;

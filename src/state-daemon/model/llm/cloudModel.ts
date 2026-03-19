@@ -1,5 +1,6 @@
 import type { LLMMessage } from "../../types/message";
 import type { CloudModel, CloudModelCompleteInput, CloudModelCompleteOutput } from "./types";
+import { createLlmFetcher } from "../../../utils/llm-adapter";
 
 export interface CreateOpenAICloudModelOptions {
   apiKey?: string;
@@ -22,6 +23,8 @@ export function createOpenAICloudModel(
   const baseURL = (options.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const model = options.model ?? DEFAULT_MODEL;
 
+  const fetcher = createLlmFetcher({ baseURL, apiKey });
+
   return {
     async complete(input: CloudModelCompleteInput): Promise<CloudModelCompleteOutput> {
       if (!apiKey) {
@@ -32,25 +35,12 @@ export function createOpenAICloudModel(
       let lastError: unknown = null;
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
         try {
-          const response = await fetch(`${baseURL}/chat/completions`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model,
-              messages,
-              stream: false,
-            }),
-          });
+          const data = await fetcher("/chat/completions", {
+            model,
+            messages,
+            stream: false,
+          }) as ChatCompletionResponse;
 
-          if (!response.ok) {
-            const reason = await response.text().catch(() => "");
-            throw new Error(`Cloud model request failed (${response.status}): ${reason}`);
-          }
-
-          const data = (await response.json()) as ChatCompletionResponse;
           const content = data.choices?.[0]?.message?.content;
           const text = typeof content === "string" ? content : "";
           return { text };

@@ -1,4 +1,5 @@
 import type { DenseEmbedder } from "../types";
+import { createLlmFetcher } from "../../../../utils/llm-adapter";
 
 export interface CreateOllamaDenseEmbedderOptions {
   baseUrl?: string;
@@ -24,46 +25,33 @@ export const createOllamaDenseEmbedder = (
   const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const model = options.model ?? DEFAULT_MODEL;
 
+  const fetcher = createLlmFetcher({ baseURL: baseUrl });
+
   return {
     async embedDense(text: string): Promise<number[]> {
       const input = text.trim() || "(empty)";
-      const response = await fetch(`${baseUrl}/api/embeddings`, {
-        method: "POST",
-        // headers: {
-        //   "content-type": "application/json",
-        // },
-        // headers: {
-        //   "content-type": "application/x-www-form-urlencoded"
-        // },
-        body: JSON.stringify({
+      
+      try {
+        const data = await fetcher("/api/embeddings", {
           model,
           prompt: input,
-        }),
-      });
+        }) as OllamaEmbedResponse;
 
-      if (!response.ok) {
-        const reason = await response.text().catch((error) => console.error(error));
+        const embedding = data?.embedding;
+        if(!Array.isArray(embedding)) {
+          throw new Error("Invalid Ollama response: embedding is missing.");
+        }
+        return embedding;
+      } catch (error: any) {
         console.log("input", input);
         console.log("body", JSON.stringify({
           model,
           prompt: input,
         }));
         throw new Error(
-          `Ollama embed request failed (${response.status}): ${reason}`,
+          `Ollama embed request failed: ${error.message}`,
         );
       }
-
-      const data = (await response.json()) as OllamaEmbedResponse;
-      const embedding = data?.embedding;
-      // if (!Array.isArray(embeddings) || embeddings.length !== 1) {
-      //   throw new Error("Invalid Ollama response: embeddings is missing.");
-      // // }
-      // return normalizeVector(embeddings[0]); 
-      if(!Array.isArray(embedding)) {
-        throw new Error("Invalid Ollama response: embedding is missing.");
-      }
-      return embedding;
-      // return normalizeVector(embedding);
     },
   };
 };
