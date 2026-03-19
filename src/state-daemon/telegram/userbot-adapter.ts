@@ -30,9 +30,7 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
         peer: target,
         action: new Api.SendMessageTypingAction(),
       }));
-    } catch (e) {
-      // 忽略
-    }
+    } catch (e) {}
   };
 
   const toTelegramMessage = async (msg: Api.Message): Promise<TelegramMessage | null> => {
@@ -40,7 +38,6 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     const fromId = msg.fromId;
     const userId = fromId instanceof Api.PeerUser ? fromId.userId.toString() : "unknown";
     
-    // 如果是自己发的，过滤掉
     if (userId === me.id.toString()) return null;
 
     const chatId = msg.peerId instanceof Api.PeerUser ? msg.peerId.userId.toJSNumber() :
@@ -50,40 +47,29 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     const conversationType = msg.peerId instanceof Api.PeerUser ? "private" : "group";
     const replyToMsgId = msg.replyTo instanceof Api.MessageReplyHeader ? msg.replyTo.replyToMsgId : null;
     
-    const myUsername = me?.username?.toLowerCase();
+    const myUsername = (me.username || "").toLowerCase();
     const text = (msg.message || "").toLowerCase();
     
+    // 判定 Mention：私聊 100% 触发，或者文本包含关键词
     const isMentionMe = conversationType === "private" || 
-                        (myUsername && text.includes("@" + myUsername)) ||
+                        (myUsername && text.includes(myUsername)) ||
                         text.includes("yuki") || text.includes("mochi") ||
                         (me.firstName && text.includes(me.firstName.toLowerCase()));
 
-    // 改进的回复检测
+    // 判定 Reply
     let isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
-    if (!isReplyToMe && replyToMsgId !== null) {
-      try {
-        // 如果内存没命中，尝试拉取原消息确认（带有缓存/限制以防频繁请求）
-        const replyMsg = await client.getMessages(msg.peerId, { ids: [replyToMsgId] });
-        if (replyMsg && replyMsg[0] && replyMsg[0].fromId instanceof Api.PeerUser) {
-          if (replyMsg[0].fromId.userId.toString() === me.id.toString()) {
-            isReplyToMe = true;
-          }
-        }
-      } catch (e) {
-        // 忽略
-      }
-    }
-
-    // 判定是否为机器人
+    
+    // 判定 Bot
     let isBot = false;
     try {
+      // 这里的 getEntity 可能会慢，但在 Userbot 中是必要的
       const sender = await client.getEntity(fromId);
       if (sender instanceof Api.User && sender.bot) {
         isBot = true;
       }
     } catch (e) {}
 
-    console.log(`[userbot] Msg from ${userId} (bot=${isBot}) in ${chatId}: mention=${isMentionMe} replyToMe=${isReplyToMe}`);
+    console.log(`[userbot] Ingested: from=${userId} (bot=${isBot}) chat=${chatId} text="${text.slice(0, 20)}..." mention=${isMentionMe} replyToMe=${isReplyToMe}`);
 
     return {
       userId, messageId: msg.id, chatId, conversationType, context: msg.message || "",
@@ -96,7 +82,7 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     start: async () => {
       await client.connect();
       me = await client.getMe() as Api.User;
-      console.log(`UserBot: 已作为 ${me.firstName} 登录 (ID: ${me.id})`);
+      console.log(`UserBot: 已作为 ${me.firstName} (@${me.username}) 登录 (ID: ${me.id})`);
       client.addEventHandler(async (ev) => {
         const msg = ev.message;
         if (!(msg instanceof Api.Message)) return;
@@ -140,7 +126,10 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       const text = s.chunks.join("") || DEFAULT_FINAL_TEXT;
       const target = await getSafeEntity(s.chatId);
       const sent = await client.sendMessage(target, { message: text, replyTo: s.replyToMessageId || undefined });
-      if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
+      if (sent instanceof Api.Message) {
+        sentMessageIds.add(sent.id);
+        console.log(`[userbot] Record sent message ID: ${sent.id}`);
+      }
       streams.delete(id);
       return text;
     }
