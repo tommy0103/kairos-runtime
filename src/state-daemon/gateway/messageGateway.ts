@@ -13,12 +13,12 @@ const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
 // 社交礼仪配置
 const ETIQUETTE_CONFIG = {
-  decayFactor: 0.5, // 机器人之间对话的热情衰减系数 (1.0 -> 0.5 -> 0.25 -> 0.12)
-  recoveryTimeMs: 5 * 60 * 1000, // 5 分钟线性恢复到 100% 热情
-  idleResetMs: 3 * 60 * 1000, // 3 分钟完全没动静，直接视为新对话，重置为 1.0
-  terminateThreshold: 0.15, // 热度低于 0.15 时直接闭嘴，不再回复
-  conciseThreshold: 0.6, // 热度低于 0.6 时开始精简
-  wrapUpThreshold: 0.3, // 热度低于 0.3 时开始找借口结束
+  decayFactor: 0.5, // 机器人之间对话的热情衰减系数
+  recoveryTimeMs: 5 * 60 * 1000, 
+  idleResetMs: 3 * 60 * 1000, 
+  terminateThreshold: 0.15, 
+  conciseThreshold: 0.6, 
+  wrapUpThreshold: 0.3, 
 };
 
 type SocialState = "NORMAL" | "CONCISE" | "WRAP_UP" | "SILENCE";
@@ -33,7 +33,6 @@ class SocialEtiquetteManager {
     const now = Date.now();
     const elapsed = now - entry.lastUpdate;
 
-    // 如果空闲时间超过阈值，直接重置为 1.0
     if (elapsed > ETIQUETTE_CONFIG.idleResetMs) return 1.0;
 
     const recovery = elapsed / ETIQUETTE_CONFIG.recoveryTimeMs;
@@ -42,13 +41,16 @@ class SocialEtiquetteManager {
 
   updateHeat(chatId: number, isBotInteraction: boolean) {
     if (!isBotInteraction) {
+      console.log(`[etiquette] chat=${chatId} resetting heat to 1.0 (human interaction)`);
       this.heatMap.set(chatId, { heat: 1.0, lastUpdate: Date.now() });
       return;
     }
 
     const currentHeat = this.getHeat(chatId);
+    const newHeat = currentHeat * ETIQUETTE_CONFIG.decayFactor;
+    console.log(`[etiquette] chat=${chatId} decaying heat: ${currentHeat.toFixed(2)} -> ${newHeat.toFixed(2)}`);
     this.heatMap.set(chatId, {
-      heat: currentHeat * ETIQUETTE_CONFIG.decayFactor,
+      heat: newHeat,
       lastUpdate: Date.now()
     });
   }
@@ -118,7 +120,7 @@ export function createMessageGateway(
     message: TelegramMessage,
     decision: TriggerDecision
   ) => {
-    console.log("handleMessage", message);
+    console.log("[gateway] handleTriggerMessage:", message.chatId, message.messageId, "userId:", message.userId);
 
     if (options.userRoles?.isBlocked(message.userId)) {
       if (decision.shouldTrigger) {
@@ -132,18 +134,18 @@ export function createMessageGateway(
     }
 
     // 社交礼仪处理
+    // 关键修正：只有 metadata.isBot 明确为 true 时才判定为机器人互动
     const isBotInteraction = message.metadata.isBot === true;
     const socialState = etiquetteManager.getSocialState(message.chatId, isBotInteraction);
     
-    // 如果达到 SILENCE 阈值，直接不回复
+    console.log(`[etiquette] chat=${message.chatId} userId=${message.userId} isBot=${isBotInteraction} state=${socialState}`);
+
     if (socialState === "SILENCE") {
-      console.log(`[etiquette] chat=${message.chatId} state=SILENCE, stopping conversation.`);
+      console.log(`[etiquette] chat=${message.chatId} SILENCE mode active. Skipping response.`);
       return;
     }
 
     const instruction = etiquetteManager.getInstruction(socialState);
-    
-    // 更新热度
     etiquetteManager.updateHeat(message.chatId, isBotInteraction);
 
     const streamMessageId = await options.telegram.startStream(
@@ -157,7 +159,6 @@ export function createMessageGateway(
         triggerMessage: message,
         prompt: decision.prompt + instruction,
       })) {
-        console.log("append stream", chunk);
         options.telegram.appendStream(streamMessageId, chunk);
         hasOutput = true;
       }
