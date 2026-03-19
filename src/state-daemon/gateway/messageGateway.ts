@@ -13,12 +13,15 @@ const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
 // 社交礼仪配置
 const ETIQUETTE_CONFIG = {
-  decayFactor: 0.7, // 机器人之间对话的热情衰减系数
-  recoveryTimeMs: 15 * 60 * 1000, // 15 分钟恢复到 100% 热情
-  minHeat: 0.1, 
+  decayFactor: 0.5, // 机器人之间对话的热情衰减系数 (1.0 -> 0.5 -> 0.25 -> 0.12)
+  recoveryTimeMs: 5 * 60 * 1000, // 5 分钟线性恢复到 100% 热情
+  idleResetMs: 3 * 60 * 1000, // 3 分钟完全没动静，直接视为新对话，重置为 1.0
+  terminateThreshold: 0.15, // 热度低于 0.15 时直接闭嘴，不再回复
+  conciseThreshold: 0.6, // 热度低于 0.6 时开始精简
+  wrapUpThreshold: 0.3, // 热度低于 0.3 时开始找借口结束
 };
 
-type SocialState = "NORMAL" | "CONCISE" | "WRAP_UP";
+type SocialState = "NORMAL" | "CONCISE" | "WRAP_UP" | "SILENCE";
 
 class SocialEtiquetteManager {
   private heatMap = new Map<number, { heat: number; lastUpdate: number }>();
@@ -27,25 +30,25 @@ class SocialEtiquetteManager {
     const entry = this.heatMap.get(chatId);
     if (!entry) return 1.0;
 
-    const elapsed = Date.now() - entry.lastUpdate;
+    const now = Date.now();
+    const elapsed = now - entry.lastUpdate;
+
+    // 如果空闲时间超过阈值，直接重置为 1.0
+    if (elapsed > ETIQUETTE_CONFIG.idleResetMs) return 1.0;
+
     const recovery = elapsed / ETIQUETTE_CONFIG.recoveryTimeMs;
-    const currentHeat = Math.min(1.0, entry.heat + recovery);
-    
-    return Math.max(ETIQUETTE_CONFIG.minHeat, currentHeat);
+    return Math.min(1.0, entry.heat + recovery);
   }
 
   updateHeat(chatId: number, isBotInteraction: boolean) {
-    let currentHeat = this.getHeat(chatId);
-    
-    if (isBotInteraction) {
-      currentHeat = currentHeat * ETIQUETTE_CONFIG.decayFactor;
-    } else {
-      // 真人消息直接重置热度
-      currentHeat = 1.0;
+    if (!isBotInteraction) {
+      this.heatMap.set(chatId, { heat: 1.0, lastUpdate: Date.now() });
+      return;
     }
 
+    const currentHeat = this.getHeat(chatId);
     this.heatMap.set(chatId, {
-      heat: Math.max(ETIQUETTE_CONFIG.minHeat, currentHeat),
+      heat: currentHeat * ETIQUETTE_CONFIG.decayFactor,
       lastUpdate: Date.now()
     });
   }
@@ -54,9 +57,10 @@ class SocialEtiquetteManager {
     if (!isBotInteraction) return "NORMAL";
     
     const heat = this.getHeat(chatId);
-    if (heat > 0.7) return "NORMAL";
-    if (heat > 0.4) return "CONCISE";
-    return "WRAP_UP";
+    if (heat < ETIQUETTE_CONFIG.terminateThreshold) return "SILENCE";
+    if (heat < ETIQUETTE_CONFIG.wrapUpThreshold) return "WRAP_UP";
+    if (heat < ETIQUETTE_CONFIG.conciseThreshold) return "CONCISE";
+    return "NORMAL";
   }
 
   getInstruction(state: SocialState): string {
@@ -130,9 +134,16 @@ export function createMessageGateway(
     // 社交礼仪处理
     const isBotInteraction = message.metadata.isBot === true;
     const socialState = etiquetteManager.getSocialState(message.chatId, isBotInteraction);
+    
+    // 如果达到 SILENCE 阈值，直接不回复
+    if (socialState === "SILENCE") {
+      console.log(`[etiquette] chat=${message.chatId} state=SILENCE, stopping conversation.`);
+      return;
+    }
+
     const instruction = etiquetteManager.getInstruction(socialState);
     
-    // 更新热度（在生成前更新，以便下一次消息能看到最新的热度）
+    // 更新热度
     etiquetteManager.updateHeat(message.chatId, isBotInteraction);
 
     const streamMessageId = await options.telegram.startStream(
@@ -144,7 +155,6 @@ export function createMessageGateway(
       let hasOutput = false;
       for await (const chunk of options.runtime.streamReply({
         triggerMessage: message,
-        // 将社交指令注入 Prompt
         prompt: decision.prompt + instruction,
       })) {
         console.log("append stream", chunk);
