@@ -31,13 +31,16 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
         action: new Api.SendMessageTypingAction(),
       }));
     } catch (e) {
-      // 忽略设置状态失败的情况
+      // 忽略
     }
   };
 
-  const toTelegramMessage = (msg: Api.Message): TelegramMessage | null => {
+  const toTelegramMessage = async (msg: Api.Message): Promise<TelegramMessage | null> => {
     if (!me || !msg.peerId) return null;
-    const userId = msg.fromId instanceof Api.PeerUser ? msg.fromId.userId.toString() : "unknown";
+    const fromId = msg.fromId;
+    const userId = fromId instanceof Api.PeerUser ? fromId.userId.toString() : "unknown";
+    
+    // 如果是自己发的，过滤掉
     if (userId === me.id.toString()) return null;
 
     const chatId = msg.peerId instanceof Api.PeerUser ? msg.peerId.userId.toJSNumber() :
@@ -49,15 +52,43 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     
     const myUsername = me?.username?.toLowerCase();
     const text = (msg.message || "").toLowerCase();
+    
     const isMentionMe = conversationType === "private" || 
                         (myUsername && text.includes("@" + myUsername)) ||
-                        text.includes("yuki") || text.includes("mochi");
-    const isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
+                        text.includes("yuki") || text.includes("mochi") ||
+                        (me.firstName && text.includes(me.firstName.toLowerCase()));
+
+    // 改进的回复检测
+    let isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
+    if (!isReplyToMe && replyToMsgId !== null) {
+      try {
+        // 如果内存没命中，尝试拉取原消息确认（带有缓存/限制以防频繁请求）
+        const replyMsg = await client.getMessages(msg.peerId, { ids: [replyToMsgId] });
+        if (replyMsg && replyMsg[0] && replyMsg[0].fromId instanceof Api.PeerUser) {
+          if (replyMsg[0].fromId.userId.toString() === me.id.toString()) {
+            isReplyToMe = true;
+          }
+        }
+      } catch (e) {
+        // 忽略
+      }
+    }
+
+    // 判定是否为机器人
+    let isBot = false;
+    try {
+      const sender = await client.getEntity(fromId);
+      if (sender instanceof Api.User && sender.bot) {
+        isBot = true;
+      }
+    } catch (e) {}
+
+    console.log(`[userbot] Msg from ${userId} (bot=${isBot}) in ${chatId}: mention=${isMentionMe} replyToMe=${isReplyToMe}`);
 
     return {
       userId, messageId: msg.id, chatId, conversationType, context: msg.message || "",
       timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
-      metadata: { isBot: false, username: null, replyToMessageId: replyToMsgId, replyToUserId: null, isReplyToMe, isMentionMe, mentions: [] }
+      metadata: { isBot, username: null, replyToMessageId: replyToMsgId, replyToUserId: null, isReplyToMe, isMentionMe, mentions: [] }
     };
   };
 
@@ -67,9 +98,16 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       me = await client.getMe() as Api.User;
       console.log(`UserBot: 已作为 ${me.firstName} 登录 (ID: ${me.id})`);
       client.addEventHandler(async (ev) => {
-        const m = toTelegramMessage(ev.message);
-        if (m) {
-          for (const h of messageHandlers) void Promise.resolve(h(m)).catch(e => console.error(e));
+        const msg = ev.message;
+        if (!(msg instanceof Api.Message)) return;
+
+        try {
+          const m = await toTelegramMessage(msg);
+          if (m) {
+            for (const h of messageHandlers) void Promise.resolve(h(m)).catch(e => console.error(e));
+          }
+        } catch (e) {
+          console.error("[userbot] handler error:", e);
         }
       }, new NewMessage({}));
       return new Promise(() => {});
@@ -84,25 +122,15 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
     },
     startStream: async (chatId, messageId) => {
-      // 不再发送占位符消息，只设置正在输入状态
       void setTyping(chatId);
       const streamId = nextStreamId++;
-      streams.set(streamId, { 
-        chatId, 
-        placeholderMessageId: 0, // 不再使用
-        conversationType: "group", 
-        username: null, 
-        replyToMessageId: messageId || null, 
-        replyToUserId: null, 
-        chunks: [] 
-      });
+      streams.set(streamId, { chatId, placeholderMessageId: 0, conversationType: "group", username: null, replyToMessageId: messageId || null, replyToUserId: null, chunks: [] });
       return streamId;
     },
     appendStream: (id, c) => {
       const s = streams.get(id);
       if (s) {
         s.chunks.push(c);
-        // 每收到 5 个 chunk 刷新一次 typing 状态（TG 状态通常 5 秒消失）
         if (s.chunks.length % 5 === 0) void setTyping(s.chatId);
       }
     },
@@ -111,14 +139,8 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       if (!s) return "";
       const text = s.chunks.join("") || DEFAULT_FINAL_TEXT;
       const target = await getSafeEntity(s.chatId);
-      
-      // 直接发送新消息，而不是编辑占位符
-      const sent = await client.sendMessage(target, { 
-        message: text, 
-        replyTo: s.replyToMessageId || undefined 
-      });
+      const sent = await client.sendMessage(target, { message: text, replyTo: s.replyToMessageId || undefined });
       if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
-      
       streams.delete(id);
       return text;
     }
