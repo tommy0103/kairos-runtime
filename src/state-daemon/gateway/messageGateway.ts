@@ -11,6 +11,56 @@ import { createEventNormalizer } from "./eventNormalizer";
 
 const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
+// 社交礼仪配置
+const ETIQUETTE_CONFIG = {
+  decayFactor: 0.6, // 机器人之间对话的热情衰减系数
+  recoveryTimeMs: 10 * 60 * 1000, // 10 分钟恢复到 100% 热情
+  minHeat: 0.1, // 最低保留 10% 的概率（留点火种）
+};
+
+class SocialEtiquetteManager {
+  private heatMap = new Map<number, { heat: number; lastUpdate: number }>();
+
+  getHeat(chatId: number): number {
+    const entry = this.heatMap.get(chatId);
+    if (!entry) return 1.0;
+
+    const elapsed = Date.now() - entry.lastUpdate;
+    const recovery = elapsed / ETIQUETTE_CONFIG.recoveryTimeMs;
+    const currentHeat = Math.min(1.0, entry.heat + recovery);
+    
+    return Math.max(ETIQUETTE_CONFIG.minHeat, currentHeat);
+  }
+
+  updateHeat(chatId: number, isBotInteraction: boolean) {
+    let currentHeat = this.getHeat(chatId);
+    
+    if (isBotInteraction) {
+      // 机器人对话，热情度降低
+      currentHeat = currentHeat * ETIQUETTE_CONFIG.decayFactor;
+    } else {
+      // 人类对话，热情度立即重置
+      currentHeat = 1.0;
+    }
+
+    this.heatMap.set(chatId, {
+      heat: Math.max(ETIQUETTE_CONFIG.minHeat, currentHeat),
+      lastUpdate: Date.now()
+    });
+  }
+
+  shouldRespond(chatId: number, isBotInteraction: boolean): { allowed: boolean; heat: number } {
+    if (!isBotInteraction) return { allowed: true, heat: 1.0 };
+    
+    const heat = this.getHeat(chatId);
+    const random = Math.random();
+    const allowed = random < heat;
+    
+    console.log(`[etiquette] chat=${chatId} isBot=true heat=${heat.toFixed(2)} roll=${random.toFixed(2)} result=${allowed}`);
+    return { allowed, heat };
+  }
+}
+
 export interface CreateMessageGatewayOptions {
   telegram: TelegramAdapter;
   runtime: ClientRuntime;
@@ -31,6 +81,8 @@ export function createMessageGateway(
     telegram: options.telegram,
     runtime: options.runtime,
   };
+
+  const etiquetteManager = new SocialEtiquetteManager();
 
   const policies = [...options.policies].sort(
     (a, b) => a.priority - b.priority
@@ -65,6 +117,19 @@ export function createMessageGateway(
     if (!decision.shouldTrigger || !decision.prompt) {
       return;
     }
+
+    // 社交礼仪检查：如果是来自 Bot 的触发，判定概率
+    const isBotInteraction = message.metadata.isBot || message.metadata.isReplyToMe; // 简单判定：如果是回复我也按互动算
+    const etiquette = etiquetteManager.shouldRespond(message.chatId, isBotInteraction);
+    
+    if (!etiquette.allowed) {
+      console.log(`[etiquette] skipped response to bot-like user ${message.userId} in chat ${message.chatId} (heat too low)`);
+      return;
+    }
+
+    // 确定要回复，更新热度
+    etiquetteManager.updateHeat(message.chatId, isBotInteraction);
+
     // console.log("streamMessage", message);
     const streamMessageId = await options.telegram.startStream(
       message.chatId,
