@@ -13,7 +13,7 @@ const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
 // 社交礼仪配置
 const ETIQUETTE_CONFIG = {
-  decayFactor: 0.5, // 机器人之间对话的热情衰减系数
+  decayFactor: 0.5, // 衰减系数
   recoveryTimeMs: 5 * 60 * 1000, 
   idleResetMs: 3 * 60 * 1000, 
   terminateThreshold: 0.15, 
@@ -39,9 +39,8 @@ class SocialEtiquetteManager {
     return Math.min(1.0, entry.heat + recovery);
   }
 
-  updateHeat(chatId: number, isBotInteraction: boolean) {
-    if (!isBotInteraction) {
-      console.log(`[etiquette] chat=${chatId} resetting heat to 1.0 (human interaction)`);
+  updateHeat(chatId: number, isBotLike: boolean) {
+    if (!isBotLike) {
       this.heatMap.set(chatId, { heat: 1.0, lastUpdate: Date.now() });
       return;
     }
@@ -55,8 +54,8 @@ class SocialEtiquetteManager {
     });
   }
 
-  getSocialState(chatId: number, isBotInteraction: boolean): SocialState {
-    if (!isBotInteraction) return "NORMAL";
+  getSocialState(chatId: number, isBotLike: boolean): SocialState {
+    if (!isBotLike) return "NORMAL";
     
     const heat = this.getHeat(chatId);
     if (heat < ETIQUETTE_CONFIG.terminateThreshold) return "SILENCE";
@@ -120,8 +119,6 @@ export function createMessageGateway(
     message: TelegramMessage,
     decision: TriggerDecision
   ) => {
-    console.log("[gateway] handleTriggerMessage:", message.chatId, message.messageId, "userId:", message.userId);
-
     if (options.userRoles?.isBlocked(message.userId)) {
       if (decision.shouldTrigger) {
         await options.telegram.reply(message.chatId, BLOCKED_REPLY, message.messageId);
@@ -133,20 +130,24 @@ export function createMessageGateway(
       return;
     }
 
-    // 社交礼仪处理
-    // 关键修正：只有 metadata.isBot 明确为 true 时才判定为机器人互动
-    const isBotInteraction = message.metadata.isBot === true;
-    const socialState = etiquetteManager.getSocialState(message.chatId, isBotInteraction);
+    // 优雅的判定逻辑：
+    // 1. 如果是主人说的，永远 1.0 热度。
+    // 2. 如果是机器人说的 (metadata.isBot)，应用衰减。
+    // 3. 如果是别人回复我 (isReplyToMe)，也应用衰减（防止 Bot 间回复套娃）。
+    const isOwner = options.userRoles?.getRole(message.userId) === "owner";
+    const isBotLike = !isOwner && (message.metadata.isBot === true || message.metadata.isReplyToMe === true);
     
-    console.log(`[etiquette] chat=${message.chatId} userId=${message.userId} isBot=${isBotInteraction} state=${socialState}`);
+    const socialState = etiquetteManager.getSocialState(message.chatId, isBotLike);
+    
+    console.log(`[etiquette] chat=${message.chatId} userId=${message.userId} isOwner=${isOwner} isBotLike=${isBotLike} state=${socialState}`);
 
     if (socialState === "SILENCE") {
-      console.log(`[etiquette] chat=${message.chatId} SILENCE mode active. Skipping response.`);
+      console.log(`[etiquette] SILENCE triggered for chat ${message.chatId}. Stopping loop.`);
       return;
     }
 
     const instruction = etiquetteManager.getInstruction(socialState);
-    etiquetteManager.updateHeat(message.chatId, isBotInteraction);
+    etiquetteManager.updateHeat(message.chatId, isBotLike);
 
     const streamMessageId = await options.telegram.startStream(
       message.chatId,
