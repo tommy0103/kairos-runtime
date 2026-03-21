@@ -17,6 +17,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   const bot = new Bot(token);
   const messages: TelegramMessage[] = [];
   const streams = new Map<number, StreamState>();
+  const typingIntervals = new Map<number, ReturnType<typeof setInterval>>();
   const pendingMediaGroups = new Map<
     string,
     {
@@ -38,13 +39,20 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     text: string,
     messageId?: number
   ) => {
-    const resolvedMessageId = toOptionalMessageId(messageId);
-    if (resolvedMessageId === undefined) {
-      return bot.api.sendMessage(chatId, text);
+    let htmlText: string | null = null;
+    try {
+      htmlText = markdownToTelegramHtml(text);
+    } catch {
+      // fall through
     }
-    return bot.api.sendMessage(chatId, text, {
-      reply_to_message_id: resolvedMessageId,
-    });
+    const body = htmlText ?? text;
+    const opts: Record<string, unknown> = {};
+    if (htmlText) opts.parse_mode = "HTML";
+    const resolvedMessageId = toOptionalMessageId(messageId);
+    if (resolvedMessageId !== undefined) {
+      opts.reply_to_message_id = resolvedMessageId;
+    }
+    return bot.api.sendMessage(chatId, body, opts as any);
   };
 
   const dispatchMessage = (message: TelegramMessage) => {
@@ -79,6 +87,14 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   ) => {
     // const sent = await sendMessage(chatId, placeholder, messageId);
     const streamId = nextStreamId++;
+
+    // Send typing indicator and repeat every 4s (Telegram clears it after 5s)
+    bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    const typingInterval = setInterval(() => {
+      bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    }, 4000);
+    typingIntervals.set(streamId, typingInterval);
+
     streams.set(streamId, {
       chatId,
       // placeholderMessageId: sent.message_id,
@@ -105,6 +121,12 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   };
 
   const endStream: TelegramAdapter["endStream"] = async (streamId) => {
+    const interval = typingIntervals.get(streamId);
+    if (interval) {
+      clearInterval(interval);
+      typingIntervals.delete(streamId);
+    }
+
     const state = streams.get(streamId);
     if (!state) {
       throw new Error(`stream not started for streamId: ${streamId}`);

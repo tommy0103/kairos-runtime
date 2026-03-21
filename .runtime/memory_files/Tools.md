@@ -14,7 +14,7 @@ fetch_webpage(url: string): string
 run_safe_bash(command: string, timeoutMs?: number): string
 ```
 
-- description: Run a read-oriented bash command in /workspace/.runtime/memory_files with safety checks.
+- description: Run a read-oriented bash command in /Users/yao/Desktop/code/tomiya/kairos-runtime/.runtime/memory_files with safety checks.
 - parameters:
   - command (string, required) - Bash command to execute. Dangerous commands are blocked.
   - timeoutMs (number, optional) - Optional timeout in milliseconds. Default 15000, max 60000.
@@ -33,9 +33,9 @@ read_file_safe(path: string): string
 write_file_safe(path: string, content: string, mode?: string | string): string
 ```
 
-- description: Write UTF-8 content only under /workspace/.runtime/memory_files. Please use this tool to update Identity.md.
+- description: Write UTF-8 content only under /Users/yao/Desktop/code/tomiya/kairos-runtime/.runtime/memory_files. Please use this tool to update Identity.md.
 - parameters:
-  - path (string, required) - Relative file path under /workspace/.runtime/memory_files.
+  - path (string, required) - Relative file path under /Users/yao/Desktop/code/tomiya/kairos-runtime/.runtime/memory_files.
   - content (string, required) - UTF-8 content to write.
   - mode (string | string, optional) - Write mode: overwrite (default) or append.
 
@@ -44,7 +44,7 @@ write_file_safe(path: string, content: string, mode?: string | string): string
 list_files_safe(path?: string, recursive?: boolean, contains?: string, maxResults?: number): string
 ```
 
-- description: List files/directories only under /workspace/.runtime/memory_files.
+- description: List files/directories only under /Users/yao/Desktop/code/tomiya/kairos-runtime/.runtime/memory_files.
 - parameters:
   - path (string, optional) - Relative directory path under src/enclave-runtime/agent/memory_files. Default current root.
   - recursive (boolean, optional) - Whether to list recursively. Default false.
@@ -111,44 +111,3 @@ apoptosis(toolName: string): string
 - description: Request removing a registered tool by name. Actual removal is handled by the loop runner event listener.
 - parameters:
   - toolName (string, required) - Tool name to remove from dynamicToolRegistry.
-
-## mod_pow
-```ts
-mod_pow(base: string, exponent: string, modulus: string): string
-```
-
-- description: 计算大数模幂 a^b mod m
-- parameters:
-  - base (string, required) - 底数
-  - exponent (string, required) - 指数
-  - modulus (string, required) - 模数
-
-## high_precision_multiply
-```ts
-high_precision_multiply(a: string, b: string): string
-```
-
-- description: 计算两个任意精度数字的乘积 a * b，支持整数和小数
-- parameters:
-  - a (string, required) - 第一个乘数（数字字符串）
-  - b (string, required) - 第二个乘数（数字字符串）
-
-## mod_exp
-```ts
-mod_exp(base: string, exponent: string, modulus: string): string
-```
-
-- description: 计算大数的模幂运算 (base^exponent) mod modulus
-- parameters:
-  - base (string, required) - 底数
-  - exponent (string, required) - 指数
-  - modulus (string, required) - 模数
-
-## get_weather
-```ts
-get_weather(city: string): string
-```
-
-- description: 获取指定城市的当前天气信息
-- parameters:
-  - city (string, required) - 城市名称，例如：天津、北京、上海
