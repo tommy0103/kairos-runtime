@@ -144,7 +144,7 @@ export function createMessageGateway(
 
     // 终极保险：手动指令中断对话链
     const trimmedText = message.context.trim().toLowerCase();
-    if (trimmedText === "!" || trimmedText === "！" || trimmedText === "!stop" || trimmedText === "！stop") {
+    if (trimmedText === "!stop" || trimmedText === "！stop") {
       console.log(`[etiquette] Manual interrupt by user ${message.userId} in chat ${message.chatId}`);
       etiquetteManager.forceSilence(message.chatId);
       return;
