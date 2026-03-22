@@ -11,12 +11,12 @@ import { createEventNormalizer } from "./eventNormalizer";
 
 const BLOCKED_REPLY = "我不能响应被拉黑的用户喵";
 
-// 社交礼仪配置
+// 社交礼仪配置（针对机器人对谈的专项治理）
 const ETIQUETTE_CONFIG = {
-  decayFactor: 0.5, // 衰减系数
-  recoveryTimeMs: 5 * 60 * 1000, 
-  idleResetMs: 3 * 60 * 1000, 
-  terminateThreshold: 0.15, 
+  decayFactor: 0.3, // 激进的衰减系数，机器人对话快速降温
+  recoveryTimeMs: 60 * 60 * 1000, // 恢复周期延长到 1 小时
+  idleResetMs: 30 * 60 * 1000, // 30 分钟无活动重置
+  terminateThreshold: 0.1, 
   conciseThreshold: 0.6, 
   wrapUpThreshold: 0.3, 
 };
@@ -39,22 +39,38 @@ class SocialEtiquetteManager {
     return Math.min(1.0, entry.heat + recovery);
   }
 
-  updateHeat(chatId: number, isBotLike: boolean) {
-    if (!isBotLike) {
+  updateHeat(chatId: number, isBotLike: boolean, isOwner: boolean = false) {
+    if (isOwner) {
+      // 只有主人能立刻重置热度
       this.heatMap.set(chatId, { heat: 1.0, lastUpdate: Date.now() });
       return;
     }
 
     const currentHeat = this.getHeat(chatId);
-    const newHeat = currentHeat * ETIQUETTE_CONFIG.decayFactor;
-    console.log(`[etiquette] chat=${chatId} decaying heat: ${currentHeat.toFixed(2)} -> ${newHeat.toFixed(2)}`);
-    this.heatMap.set(chatId, {
-      heat: newHeat,
-      lastUpdate: Date.now()
-    });
+    
+    if (isBotLike) {
+      const newHeat = currentHeat * ETIQUETTE_CONFIG.decayFactor;
+      console.log(`[etiquette] chat=${chatId} decaying heat: ${currentHeat.toFixed(2)} -> ${newHeat.toFixed(2)}`);
+      this.heatMap.set(chatId, {
+        heat: newHeat,
+        lastUpdate: Date.now()
+      });
+    } else {
+      // 普通非主人用户，不再重置热度，允许随时间缓慢恢复
+      this.heatMap.set(chatId, {
+        heat: currentHeat,
+        lastUpdate: Date.now()
+      });
+    }
+  }
+
+  // 手动强制静默
+  forceSilence(chatId: number) {
+    this.heatMap.set(chatId, { heat: 0.0, lastUpdate: Date.now() });
   }
 
   getSocialState(chatId: number, isBotLike: boolean): SocialState {
+    // 只有在被判定为 BotLike 对话时，才执行降级/封口逻辑
     if (!isBotLike) return "NORMAL";
     
     const heat = this.getHeat(chatId);
@@ -126,20 +142,37 @@ export function createMessageGateway(
       return;
     }
 
+    // 终极保险：手动指令中断对话链
+    const trimmedText = message.context.trim().toLowerCase();
+    if (trimmedText === "!" || trimmedText === "！" || trimmedText === "!stop" || trimmedText === "！stop") {
+      console.log(`[etiquette] Manual interrupt by user ${message.userId} in chat ${message.chatId}`);
+      etiquetteManager.forceSilence(message.chatId);
+      return;
+    }
+
     if (!decision.shouldTrigger || !decision.prompt) {
       return;
     }
 
-    // 优雅的判定逻辑：
-    // 1. 如果是主人说的，永远 1.0 热度。
-    // 2. 如果是机器人说的 (metadata.isBot)，应用衰减。
-    // 3. 如果是别人回复我 (isReplyToMe)，也应用衰减（防止 Bot 间回复套娃）。
-    const isOwner = options.userRoles?.getRole(message.userId) === "owner";
-    const isBotLike = !isOwner && (message.metadata.isBot === true || message.metadata.isReplyToMe === true);
+    // 判定 Bot
+    const role = options.userRoles?.getRole(message.userId);
+    const isOwner = role === "owner";
+    const username = (message.metadata.username || "").toLowerCase();
     
+    // 满足以下任一条件才视为机器人行为（触发热度衰减）：
+    const isBotLike = !isOwner && (
+        message.metadata.isBot === true || 
+        role === "bot" ||
+        username.includes("bot")
+    );
+    
+    // 核心修复：1. 先更新热度
+    etiquetteManager.updateHeat(message.chatId, isBotLike, isOwner);
+    
+    // 2. 再判定（判定扣分后的热度）
     const socialState = etiquetteManager.getSocialState(message.chatId, isBotLike);
     
-    console.log(`[etiquette] chat=${message.chatId} userId=${message.userId} isOwner=${isOwner} isBotLike=${isBotLike} state=${socialState}`);
+    console.log(`[etiquette] chat=${message.chatId} userId=${message.userId} isOwner=${isOwner} isBotLike=${isBotLike} heat=${etiquetteManager.getHeat(message.chatId).toFixed(2)} state=${socialState}`);
 
     if (socialState === "SILENCE") {
       console.log(`[etiquette] SILENCE triggered for chat ${message.chatId}. Stopping loop.`);
@@ -147,7 +180,6 @@ export function createMessageGateway(
     }
 
     const instruction = etiquetteManager.getInstruction(socialState);
-    etiquetteManager.updateHeat(message.chatId, isBotLike);
 
     const streamMessageId = await options.telegram.startStream(
       message.chatId,
@@ -218,9 +250,18 @@ export function createMessageGateway(
   const unsubscribe = options.telegram.onMessage((rawMessage) => {
     normalizer.ingestMessage(rawMessage);
 
+    // 核心修复：物理去重
+    if (triggeredMessageIds.has(rawMessage.messageId)) {
+      return;
+    }
+
     void (async () => {
       const decision = await pickDecision(policies, rawMessage, context);
       if (!decision.shouldTrigger || !decision.prompt) {
+        return;
+      }
+      // 再次检查去重，防止并发竞态
+      if (triggeredMessageIds.has(rawMessage.messageId)) {
         return;
       }
       triggeredMessageIds.add(rawMessage.messageId);

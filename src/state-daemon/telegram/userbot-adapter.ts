@@ -66,8 +66,10 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       // 这里的 getEntity 可能会慢，但在 Userbot 中是必要的
       const sender = await client.getEntity(fromId);
       if (sender instanceof Api.User) {
-        isBot = sender.bot || false;
-        senderName = sender.username || sender.firstName || null;
+        const username = sender.username || "";
+        // 增强识别：即使官方没标 isBot，但如果用户名包含 bot 字符，也视为潜在机器人
+        isBot = sender.bot || username.toLowerCase().includes("bot") || false;
+        senderName = username || sender.firstName || null;
       } else if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
         senderName = sender.title || null;
       }

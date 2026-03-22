@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-export type UserRole = "owner" | "member" | "blocked";
+export type UserRole = "owner" | "member" | "blocked" | "bot";
 
 export interface UserRoleEntry {
     userId: string;
@@ -19,7 +19,7 @@ export interface UserRolesStore {
     listAll: () => UserRoleEntry[];
 }
 
-const VALID_ROLES = new Set<string>(["owner", "member", "blocked"]);
+const VALID_ROLES = new Set<string>(["owner", "member", "blocked", "bot"]);
 
 export function createUserRolesStore(dbPath = "data/memoh.db"): UserRolesStore {
     const dir = dirname(dbPath);
