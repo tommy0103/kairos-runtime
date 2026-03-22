@@ -59,22 +59,28 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     // 判定 Reply
     let isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
     
-    // 判定 Bot
+    // 判定 Bot 和提取用户名/姓名
     let isBot = false;
+    let senderName: string | null = null;
     try {
       // 这里的 getEntity 可能会慢，但在 Userbot 中是必要的
       const sender = await client.getEntity(fromId);
-      if (sender instanceof Api.User && sender.bot) {
-        isBot = true;
+      if (sender instanceof Api.User) {
+        isBot = sender.bot || false;
+        senderName = sender.username || sender.firstName || null;
+      } else if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
+        senderName = sender.title || null;
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn(`[userbot] Failed to get entity for ${fromId}:`, e);
+    }
 
-    console.log(`[userbot] Ingested: from=${userId} (bot=${isBot}) chat=${chatId} text="${text.slice(0, 20)}..." mention=${isMentionMe} replyToMe=${isReplyToMe}`);
+    console.log(`[userbot] Ingested: from=${userId} (${senderName}) (bot=${isBot}) chat=${chatId} text="${text.slice(0, 20)}..." mention=${isMentionMe} replyToMe=${isReplyToMe}`);
 
     return {
       userId, messageId: msg.id, chatId, conversationType, context: msg.message || "",
       timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
-      metadata: { isBot, username: null, replyToMessageId: replyToMsgId, replyToUserId: null, isReplyToMe, isMentionMe, mentions: [] }
+      metadata: { isBot, username: senderName, replyToMessageId: replyToMsgId, replyToUserId: null, isReplyToMe, isMentionMe, mentions: [] }
     };
   };
 
