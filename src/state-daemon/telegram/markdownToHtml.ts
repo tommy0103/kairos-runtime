@@ -25,7 +25,78 @@ export function markdownToTelegramHtml(markdown: string): string {
 
 function render(tokens: Token[], state: State): string {
   let out = "";
-  for (const t of tokens) out += one(t, state);
+  let i = 0;
+  while (i < tokens.length) {
+    if (tokens[i].type === "table_open") {
+      const { html, end } = renderTable(tokens, i, state);
+      out += html;
+      i = end + 1;
+    } else {
+      out += one(tokens[i], state);
+      i++;
+    }
+  }
+  return out;
+}
+
+function renderTable(tokens: Token[], start: number, state: State): { html: string; end: number } {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let i = start + 1;
+
+  while (i < tokens.length && tokens[i].type !== "table_close") {
+    const t = tokens[i];
+    if (t.type === "tr_open") {
+      currentRow = [];
+    } else if (t.type === "tr_close") {
+      rows.push(currentRow);
+    } else if (t.type === "th_open" || t.type === "td_open") {
+      // next token should be inline with the cell content
+      i++;
+      const cellContent = i < tokens.length && tokens[i].type === "inline"
+        ? (tokens[i].children ? plainText(tokens[i].children!) : tokens[i].content)
+        : "";
+      currentRow.push(cellContent);
+      // skip the th_close/td_close
+      i++;
+    } else {
+      // thead_open, thead_close, tbody_open, tbody_close — skip
+    }
+    i++;
+  }
+
+  if (rows.length === 0) return { html: "", end: i };
+
+  // calculate column widths
+  const colCount = Math.max(...rows.map(r => r.length));
+  const widths: number[] = Array(colCount).fill(0);
+  for (const row of rows) {
+    for (let c = 0; c < row.length; c++) {
+      widths[c] = Math.max(widths[c], row[c].length);
+    }
+  }
+
+  // build text table
+  const lines: string[] = [];
+  for (let r = 0; r < rows.length; r++) {
+    const cells = rows[r].map((cell, c) => cell.padEnd(widths[c]));
+    lines.push(cells.join(" | "));
+    if (r === 0) {
+      lines.push(widths.map(w => "-".repeat(w)).join("-+-"));
+    }
+  }
+
+  return { html: `<pre>${esc(lines.join("\n"))}</pre>\n`, end: i };
+}
+
+function plainText(tokens: Token[]): string {
+  let out = "";
+  for (const t of tokens) {
+    if (t.type === "text") out += t.content;
+    else if (t.type === "code_inline") out += t.content;
+    else if (t.type === "softbreak" || t.type === "hardbreak") out += " ";
+    else if (t.children) out += plainText(t.children);
+  }
   return out;
 }
 

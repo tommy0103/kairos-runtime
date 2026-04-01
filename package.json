@@ -25,6 +25,8 @@
   },
   "module": "src/index.js",
   "dependencies": {
-    "telegram": "^2.26.22"
+    "telegram": "^2.26.22",
+    "@mariozechner/pi-agent-core": "^0.61.1",
+    "@mariozechner/pi-ai": "^0.61.1"
   }
 }
