@@ -20,10 +20,10 @@ rm -f "$vfs_socket"
 export MEMORY_VFS_TARGET="$vfs_socket"
 export KAIROS_VFS_SOCKET="$vfs_socket"
 
-"$vfs_bin" &
+export VFS_LISTEN="unix://$vfs_socket" && "$vfs_bin" &
 vfs_pid=$!
 
-for i in {1..30}; do
+for i in {1..120}; do
   if [ -S "$vfs_socket" ]; then
     echo '[app] memory-vfs ready'
     break

@@ -4,6 +4,7 @@
 //
 // Consumers (archiver, searcher, store) see no change.
 
+import { Metadata } from 'nice-grpc-common';
 import * as grpc from "@grpc/grpc-js";
 import { createChannel, createClient } from "nice-grpc";
 import {
@@ -68,6 +69,13 @@ export class MemoryVfsClient {
     this.timeoutMs = options.timeoutMs;
   }
 
+  private buildOptions() {
+    return {
+      ...this.buildCallOptions(),
+      metadata: Metadata.from({ 'authorization': 'Bearer KAIROS_SYSTEM_TOKEN' })
+    };
+  }
+
   async search(request: SearchRequest): Promise<SearchResponse> {
     // --- [PRESERVED] Old direct RPC ---
     // return this.grpcClient.search(request, this.buildCallOptions());
@@ -80,7 +88,7 @@ export class MemoryVfsClient {
     });
     const resp = await this.logosClient.call(
       { tool: "memory.search", paramsJson: params },
-      this.buildCallOptions()
+      this.buildOptions()
     );
     // Convert logos response to old SearchResponse format
     const messages = JSON.parse(resp.resultJson || "[]");
@@ -102,7 +110,7 @@ export class MemoryVfsClient {
     const uri = translatePath(request.path);
     await this.logosClient.write(
       { uri, content: request.content },
-      this.buildCallOptions()
+      this.buildOptions()
     );
     return {};
   }
@@ -114,7 +122,7 @@ export class MemoryVfsClient {
     const uri = translatePath(request.path);
     const resp = await this.logosClient.read(
       { uri },
-      this.buildCallOptions()
+      this.buildOptions()
     );
     return { content: resp.content };
   }
@@ -126,7 +134,7 @@ export class MemoryVfsClient {
     const uri = translatePath(request.path);
     await this.logosClient.patch(
       { uri, partial: request.partialContent },
-      this.buildCallOptions()
+      this.buildOptions()
     );
     return {};
   }
@@ -153,7 +161,7 @@ export class MemoryVfsClient {
           uri: `logos://memory/groups/${request.chatId}/messages`,
           content: msgJson,
         },
-        this.buildCallOptions()
+        this.buildOptions()
       );
     }
 
@@ -173,7 +181,7 @@ export class MemoryVfsClient {
           uri: `logos://memory/groups/${request.chatId}/summary/short/${period}`,
           content: summaryJson,
         },
-        this.buildCallOptions()
+        this.buildOptions()
       );
     }
 
@@ -213,7 +221,7 @@ function getDefaultMemoryVfsTarget(): string {
     // --- [PRESERVED] Old default ---
     // process.env.KAIROS_VFS_SOCKET ??
     // "unix:///run/kairos-runtime/sockets/kairos-runtime-vfs.sock"
-    "unix:///tmp/logos-sandbox/logos.sock"
+    "unix:///run/kairos-runtime/sockets/kairos-runtime-vfs.sock"
   );
 }
 
