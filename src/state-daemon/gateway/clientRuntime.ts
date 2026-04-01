@@ -116,18 +116,40 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
         const systemPrompt = buildSystemPrompt(contextJson, botPersona, personaLong, personaMid);
         const messages = buildLlmMessages(triggerMessage, prompt, contextJson, systemPrompt);
 
-        // 4. Stream from enclave
+        // 4. Stream from enclave, collect full reply
+        let fullReply = "";
         for await (const event of enclaveClient.streamReply({
           chatId: triggerMessage.chatId,
           messages,
           imageUrls: triggerMessage.imageUrls,
         })) {
           if (event.type === "message_update" && event.role === "assistant" && event.delta) {
+            fullReply += event.delta;
             stream.push(event.delta);
           } else if (event.type === "failed") {
             throw new Error(event.error);
           } else if (event.type === "completed") {
             break;
+          }
+        }
+
+        // 5. Write bot reply back to logos memory (so next turn has context)
+        if (fullReply.trim()) {
+          try {
+            await vfs.write({
+              path: `logos://memory/groups/${triggerMessage.chatId}/messages`,
+              content: JSON.stringify({
+                msg_id: Date.now(),
+                chat_id: String(triggerMessage.chatId),
+                speaker: BOT_UID,
+                text: fullReply,
+                reply_to: triggerMessage.messageId,
+                ts: new Date().toISOString(),
+                mentions: "[]",
+              }),
+            });
+          } catch (e) {
+            console.error("[clientRuntime] failed to write bot reply:", e);
           }
         }
 
@@ -149,7 +171,18 @@ function buildSystemPrompt(
   senderPersonaLong: string,
   senderPersonaMid: string,
 ): string {
-  let prompt = `You are an AI agent running on the Logos kernel. All your capabilities come from 5 primitives: read, write, patch, exec, call.
+  let prompt = `You are an AI agent running on the Logos kernel.
+
+## Core Rules
+- Stay in character at all times. Never break the fourth wall.
+- Be helpful through action, not pleasantries. Skip "Great question!" — just help.
+- Have opinions. Disagree when warranted. A mindless agent is just a search engine.
+- When using tools, work silently. Don't expose tool calls in your reply.
+- Try to solve problems yourself before asking the user. Read files, check context, search.
+- Protect private information. When unsure about external actions, ask first.
+
+## Capabilities
+You have 5 primitives: read, write, patch, exec, call — all through logos:// URIs.
 
 Current time: ${new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" })}`;
 

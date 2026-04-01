@@ -9,7 +9,6 @@ import * as grpc from "@grpc/grpc-js";
 import { LogosDefinition, type LogosClient } from "../../../state-daemon/storage/vfs/generated/logos";
 import crypto from "node:crypto";
 
-const SOCKET = process.env.LOGOS_SOCKET ?? "/tmp/logos-sandbox/logos.sock";
 const MAX_MSG = 16 * 1024 * 1024;
 
 let _client: LogosClient | null = null;
@@ -17,7 +16,8 @@ let _sessionKey: string | undefined;
 
 function getClient(): LogosClient {
   if (!_client) {
-    const target = SOCKET.startsWith("unix:") ? SOCKET : `unix://${SOCKET}`;
+    const socket = process.env.LOGOS_SOCKET ?? "/tmp/logos-sandbox/logos.sock";
+    const target = socket.startsWith("unix:") ? socket : `unix://${socket}`;
     const channel = createChannel(target, grpc.credentials.createInsecure(), {
       "grpc.max_send_message_length": MAX_MSG,
       "grpc.max_receive_message_length": MAX_MSG,

@@ -1,7 +1,8 @@
 export * from "./messageGateway";
 export * from "./eventNormalizer";
 export * from "./clientRuntime";
-export * from "./context";
+// logos-native: context module (session clustering, archiver) replaced by logos kernel
+// export * from "./context";
 export * from "./types";
 export * from "./strategies/mentionMe";
 export * from "./strategies/privateChat";

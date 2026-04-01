@@ -22,7 +22,6 @@ function readMemoryFile(fileName: string): string {
 
 export const system = () => {
   const soulContent = readMemoryFile("Soul.md");
-  const identityContent = readMemoryFile("Identity.md");
   const toolsContent = readMemoryFile("Tools.md");
 
   return `
@@ -34,9 +33,8 @@ export const system = () => {
 
     # Every Session
     Before anything else:
-    - Read ${quote("IDENTITY.md")} to remember who you are
     - Read ${quote("SOUL.md")} to remember how to behave
-    - Deeply internalize your persona and behavioral guidelines from ${quote("IDENTITY.md")} and ${quote("SOUL.md")}.
+    - Deeply internalize your persona and behavioral guidelines from ${quote("SOUL.md")}.
 
     # Safety
     - Keep private data private
@@ -45,9 +43,6 @@ export const system = () => {
 
     # Soul.md
     ${soulContent}
-    # Identity.md
-    ${identityContent}
-
     # Tools.md
     ${toolsContent}
 

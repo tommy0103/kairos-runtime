@@ -17,12 +17,8 @@ const OWNER_USER_ID = config.telegram.ownerUserId;
 
 process.env.AGENT_ENCLAVE_TARGET ??= AGENT_ENCLAVE_TARGET;
 process.env.MEMORY_VFS_TARGET ??= config.grpc.vfsTarget;
-process.env.MEMORY_FILES_ROOT ??= config.runtime.memoryFilesRoot;
-process.env.OLLAMA_BASE_URL ??= config.model.llm.ollama.baseUrl;
-process.env.OLLAMA_SESSION_MODEL ??= config.model.llm.ollama.model;
-process.env.OLLAMA_EMBED_MODEL ??= config.model.embedding.ollamaModel;
-process.env.EMBED_PROVIDER ??= config.model.embedding.provider;
-process.env.ARK_API_KEY ??= config.model.llm.cloud.apiKey;
+// logos-native: session clustering, embedding, and archiving handled by logos kernel.
+// Only VFS target and enclave target are needed from config.
 
 if (!BOT_TOKEN) {
   throw new Error("BOT_TOKEN is required to start telegram bot.");
