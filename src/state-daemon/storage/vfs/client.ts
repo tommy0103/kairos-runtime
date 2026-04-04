@@ -72,13 +72,13 @@ export class MemoryVfsClient {
   private buildOptions() {
     return {
       ...this.buildCallOptions(),
-      metadata: Metadata.from({ 'authorization': 'Bearer KAIROS_SYSTEM_TOKEN' })
+      metadata: Metadata({ 'authorization': 'Bearer KAIROS_SYSTEM_TOKEN' })
     };
   }
 
   async search(request: SearchRequest): Promise<SearchResponse> {
     // --- [PRESERVED] Old direct RPC ---
-    // return this.grpcClient.search(request, this.buildCallOptions());
+    // return this.grpcClient.search(request, this.buildOptions());
 
     // Logos: route through logos_call("memory.search", ...)
     const params = JSON.stringify({
@@ -105,7 +105,7 @@ export class MemoryVfsClient {
 
   async write(request: WriteRequest): Promise<WriteResponse> {
     // --- [PRESERVED] Old direct RPC ---
-    // return this.grpcClient.write(request, this.buildCallOptions());
+    // return this.grpcClient.write(request, this.buildOptions());
 
     const uri = translatePath(request.path);
     await this.logosClient.write(
@@ -117,7 +117,7 @@ export class MemoryVfsClient {
 
   async read(request: ReadRequest): Promise<ReadResponse> {
     // --- [PRESERVED] Old direct RPC ---
-    // return this.grpcClient.read(request, this.buildCallOptions());
+    // return this.grpcClient.read(request, this.buildOptions());
 
     const uri = translatePath(request.path);
     const resp = await this.logosClient.read(
@@ -129,7 +129,7 @@ export class MemoryVfsClient {
 
   async patch(request: PatchRequest): Promise<PatchResponse> {
     // --- [PRESERVED] Old direct RPC ---
-    // return this.grpcClient.patch(request, this.buildCallOptions());
+    // return this.grpcClient.patch(request, this.buildOptions());
 
     const uri = translatePath(request.path);
     await this.logosClient.patch(
@@ -141,7 +141,7 @@ export class MemoryVfsClient {
 
   async archive(request: ArchiveRequest): Promise<ArchiveResponse> {
     // --- [PRESERVED] Old direct RPC ---
-    // return this.grpcClient.archive(request, this.buildCallOptions());
+    // return this.grpcClient.archive(request, this.buildOptions());
 
     // Logos: archive = write each message to memory, then write summary
     // Messages are stored individually via logos://memory/groups/{chat_id}/messages

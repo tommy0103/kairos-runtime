@@ -2,8 +2,11 @@ import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { NewMessage } from "telegram/events";
 import type { TelegramAdapter, TelegramMessage, StreamState } from "./types";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 const DEFAULT_FINAL_TEXT = "(空内容)";
+const MEDIA_GROUP_FLUSH_DELAY_MS = 300;
 
 export function createUserBotAdapter(options: any): TelegramAdapter {
   const client = new TelegramClient(new StringSession(options.sessionString || ""), options.apiId, options.apiHash, { connectionRetries: 10, useWSS: false, autoReconnect: true });
@@ -12,6 +15,17 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
   let nextStreamId = 1;
   const messageHandlers = new Set<any>();
   let me: Api.User | null = null;
+
+  // 媒体组缓存，参照 adapter.ts
+  const pendingMediaGroups = new Map<
+    string,
+    {
+      msg: Api.Message;
+      photoCount: number;
+      photoPaths: string[];
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   const getSafeEntity = async (id: any) => {
     const ids = [id, id.toString()];
@@ -33,7 +47,35 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     } catch (e) {}
   };
 
-  const toTelegramMessage = async (msg: Api.Message): Promise<TelegramMessage | null> => {
+  const downloadPhoto = async (msg: Api.Message): Promise<string | null> => {
+    if (!(msg.media instanceof Api.MessageMediaPhoto)) return null;
+    try {
+      const buffer = await client.downloadMedia(msg.media, { workers: 1 });
+      if (buffer && buffer instanceof Buffer) {
+        const fileName = `vision-${msg.peerId?.toJSON()}-${msg.id}.jpg`;
+        const filePath = `/tmp/kairos-vision/${fileName}`;
+        await fs.mkdir("/tmp/kairos-vision", { recursive: true });
+        await fs.writeFile(filePath, buffer);
+        return `file://${filePath}`;
+      }
+    } catch (e) {
+      console.error("[userbot] Failed to download media:", e);
+    }
+    return null;
+  };
+
+  const flushMediaGroup = async (key: string) => {
+    const pending = pendingMediaGroups.get(key);
+    if (!pending) return;
+    pendingMediaGroups.delete(key);
+
+    const m = await toTelegramMessage(pending.msg, pending.photoCount, pending.photoPaths);
+    if (m) {
+      for (const h of messageHandlers) void Promise.resolve(h(m)).catch(e => console.error(e));
+    }
+  };
+
+  const toTelegramMessage = async (msg: Api.Message, photoCountOverride?: number, photoPaths?: string[]): Promise<TelegramMessage | null> => {
     if (!me || !msg.peerId) return null;
     const fromId = msg.fromId;
     const userId = fromId instanceof Api.PeerUser ? fromId.userId.toString() : "unknown";
@@ -63,11 +105,9 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     let isBot = false;
     let senderName: string | null = null;
     try {
-      // 这里的 getEntity 可能会慢，但在 Userbot 中是必要的
       const sender = await client.getEntity(fromId);
       if (sender instanceof Api.User) {
         const username = sender.username || "";
-        // 增强识别：即使官方没标 isBot，但如果用户名包含 bot 字符，也视为潜在机器人
         isBot = sender.bot || username.toLowerCase().includes("bot") || false;
         senderName = username || sender.firstName || null;
       } else if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
@@ -77,25 +117,71 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       console.warn(`[userbot] Failed to get entity for ${fromId}:`, e);
     }
 
-    console.log(`[userbot] Ingested: from=${userId} (${senderName}) (bot=${isBot}) chat=${chatId} text="${text.slice(0, 20)}..." mention=${isMentionMe} replyToMe=${isReplyToMe}`);
+    const photoCount = photoCountOverride ?? (msg.media instanceof Api.MessageMediaPhoto ? 1 : 0);
+    const photoPlaceholder = photoCount <= 0 ? "" : (photoCount === 1 ? " [photo]" : ` [photo x${photoCount}]`);
+
+    const imageUrls = photoPaths || [];
+    if (!photoPaths && msg.media instanceof Api.MessageMediaPhoto) {
+      const path = await downloadPhoto(msg);
+      if (path) imageUrls.push(path);
+    }
+
+    console.log(`[userbot] Ingested: from=${userId} (${senderName}) chat=${chatId} text="${text.slice(0, 20)}..." photo=${photoCount} mention=${isMentionMe}`);
 
     return {
-      userId, messageId: msg.id, chatId, conversationType, context: msg.message || "",
+      userId, messageId: msg.id, chatId, conversationType, 
+      context: (msg.message || "") + photoPlaceholder,
       timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
+      imageUrls,
       metadata: { isBot, username: senderName, replyToMessageId: replyToMsgId, replyToUserId: null, isReplyToMe, isMentionMe, mentions: [] }
     };
   };
+
 
   return {
     start: async () => {
       await client.connect();
       me = await client.getMe() as Api.User;
       console.log(`UserBot: 已作为 ${me.firstName} (@${me.username}) 登录 (ID: ${me.id})`);
+
       client.addEventHandler(async (ev) => {
         const msg = ev.message;
         if (!(msg instanceof Api.Message)) return;
 
         try {
+          const mediaGroupId = msg.mediaGroupId?.toString();
+          if (mediaGroupId) {
+            const chatId = msg.peerId instanceof Api.PeerUser ? msg.peerId.userId.toJSNumber() :
+                          (msg.peerId instanceof Api.PeerChat ? msg.peerId.chatId.toJSNumber() :
+                          (msg.peerId instanceof Api.PeerChannel ? msg.peerId.channelId.toJSNumber() : 0));
+            const key = `${chatId}:${mediaGroupId}`;
+            const photoPath = await downloadPhoto(msg);
+
+            let pending = pendingMediaGroups.get(key);
+            if (!pending) {
+              pending = {
+                msg,
+                photoCount: 0,
+                photoPaths: [],
+                timer: setTimeout(() => flushMediaGroup(key), MEDIA_GROUP_FLUSH_DELAY_MS),
+              };
+              pendingMediaGroups.set(key, pending);
+            } else {
+              clearTimeout(pending.timer);
+              pending.timer = setTimeout(() => flushMediaGroup(key), MEDIA_GROUP_FLUSH_DELAY_MS);
+            }
+
+            if (photoPath) {
+              pending.photoCount++;
+              pending.photoPaths.push(photoPath);
+            }
+            // 如果消息带文本，通常媒体组的第一条消息会带文本
+            if (msg.message) {
+              pending.msg = msg;
+            }
+            return;
+          }
+
           const m = await toTelegramMessage(msg);
           if (m) {
             for (const h of messageHandlers) void Promise.resolve(h(m)).catch(e => console.error(e));

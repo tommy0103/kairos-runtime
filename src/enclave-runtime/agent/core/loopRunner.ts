@@ -154,15 +154,28 @@ function extractApoptosisTargetToolName(result: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+import fs from "node:fs/promises";
+
 async function downloadImageAsBase64(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
+    let buf: Buffer;
+    let contentType: string;
+
+    if (url.startsWith("file://")) {
+      const filePath = url.slice(7);
+      buf = await fs.readFile(filePath);
+      contentType = detectImageMime(buf, null, url);
+    } else {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      buf = Buffer.from(await res.arrayBuffer());
+      contentType = detectImageMime(buf, res.headers.get("content-type"), url);
+    }
+
     const base64 = buf.toString("base64");
-    const contentType = detectImageMime(buf, res.headers.get("content-type"), url);
     return `data:${contentType};base64,${base64}`;
-  } catch {
+  } catch (err) {
+    console.warn("[vision] downloadImageAsBase64 failed for", url, err);
     return null;
   }
 }
