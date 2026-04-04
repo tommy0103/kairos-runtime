@@ -33,9 +33,7 @@ const app = new Elysia()
     set.headers['Cache-Control'] = 'no-cache';
     set.headers['Connection'] = 'keep-alive';
 
-    // 使用 docker 命令行直接读取，增加 --timestamps 方便调试
-    const child = spawn("docker", ["compose", "logs", "-f", "--tail", "200"], {
-      cwd: path.resolve(import.meta.dir, "../../"),
+    const child = spawn("docker", ["logs", "-f", "--tail", "200", "memoh-lite-app-1"], {
       env: { ...process.env, DOCKER_HOST: "unix:///var/run/docker.sock" }
     });
 
@@ -89,11 +87,9 @@ const app = new Elysia()
     return { success: true };
   })
 
-  // 增加关闭面板 API
   .post("/api/actions/shutdown", async () => {
-    console.log("Shutting down Dashboard container...");
     setTimeout(() => process.exit(0), 1000);
-    return { success: true, message: "Dashboard is shutting down." };
+    return { success: true };
   })
 
   .listen(PORT);
