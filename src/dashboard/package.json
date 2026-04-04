@@ -1,0 +1,22 @@
+{
+  "name": "@kairos-runtime/dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch server.ts",
+    "start": "bun run server.ts",
+    "build:ui": "bun build ./client/index.tsx --outdir ./public --minify"
+  },
+  "dependencies": {
+    "elysia": "latest",
+    "@elysiajs/static": "latest",
+    "@elysiajs/cors": "latest",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "bun-types": "latest"
+  }
+}

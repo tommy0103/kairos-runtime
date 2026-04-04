@@ -42,6 +42,26 @@ services:
       MEMORY_VFS_TARGET: "unix:///run/kairos-runtime/sockets/kairos-runtime-vfs.sock"
     command: /workspace/entrypoint.sh
 
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace/src/dashboard
+    user: root
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/workspace
+      - /run/kairos-runtime:/run/kairos-runtime
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DASHBOARD_AUTH_TOKEN: "${DASHBOARD_AUTH_TOKEN:-kairos-secret}"
+      MEMORY_FILES_ROOT: "/workspace/.runtime/memory_files"
+    command: >
+      bash -lc "
+      bun install && bun run build:ui && bun run start
+      "
+
   sandboxd:
     build:
       context: .
