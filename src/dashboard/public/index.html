@@ -2,10 +2,46 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kairos Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Yuki Dashboard</title>
     <style>
-        body { margin: 0; background: #242424; }
+        :root {
+            --m3-surface: #1C1B1F;
+            --m3-on-surface: #E6E1E5;
+            --m3-surface-container: #2B2930;
+            --m3-primary: #D0BCFF;
+            --m3-on-primary: #381E72;
+            --m3-primary-container: #4F378B;
+            --m3-on-primary-container: #EADDFF;
+            --m3-secondary-container: #4A4458;
+            --m3-outline: #938F99;
+            --m3-error: #F2B8B5;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--m3-surface);
+            color: var(--m3-on-surface);
+            font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+        }
+        * { box-sizing: border-box; }
+        
+        /* 滚动条美化 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #49454F; border-radius: 10px; }
+
+        /* 响应式断点 */
+        @media (max-width: 600px) {
+            .desktop-only { display: none !important; }
+            .mobile-only { display: flex !important; }
+            .main-content { padding-bottom: 80px !important; }
+        }
+        @media (min-width: 601px) {
+            .desktop-only { display: flex !important; }
+            .mobile-only { display: none !important; }
+        }
     </style>
 </head>
 <body>
