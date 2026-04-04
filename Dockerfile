@@ -26,7 +26,8 @@ RUN set -eux; \
       python3 \
       make \
       g++ \
-      unzip; \
+      unzip \
+      docker.io; \
     rm -rf /var/lib/apt/lists/*
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
