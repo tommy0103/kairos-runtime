@@ -27,7 +27,8 @@ RUN set -eux; \
       make \
       g++ \
       unzip \
-      docker.io; \
+      docker.io \
+      docker-compose-plugin; \
     rm -rf /var/lib/apt/lists/*
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

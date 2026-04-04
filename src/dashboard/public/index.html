@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Yuki Dashboard</title>
+    <!-- Material Symbols -->
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
     <style>
         :root {
             --m3-surface: #1C1B1F;
@@ -16,6 +18,7 @@
             --m3-secondary-container: #4A4458;
             --m3-outline: #938F99;
             --m3-error: #F2B8B5;
+            --m3-on-error: #601410;
         }
         body {
             margin: 0;
@@ -24,15 +27,18 @@
             color: var(--m3-on-surface);
             font-family: 'Roboto', system-ui, -apple-system, sans-serif;
             overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
         }
         * { box-sizing: border-box; }
         
-        /* 滚动条美化 */
-        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #49454F; border-radius: 10px; }
 
-        /* 响应式断点 */
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+
         @media (max-width: 600px) {
             .desktop-only { display: none !important; }
             .mobile-only { display: flex !important; }
