@@ -5,28 +5,35 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const AUTH_TOKEN = process.env.DASHBOARD_AUTH_TOKEN || "kairos-secret";
+const AUTH_TOKEN = process.env.DASHBOARD_AUTH_TOKEN || "yukimochi0721";
 const MEMORY_FILES_ROOT = process.env.MEMORY_FILES_ROOT || "../../.runtime/memory_files";
 const PORT = Number(process.env.DASHBOARD_PORT || 8080);
 
 const app = new Elysia()
   .use(cors())
-  .use(staticPlugin())
-  // 认证中间件
+  .use(staticPlugin({
+    assets: "public",
+    prefix: ""
+  }))
   .derive(({ headers }) => {
     const auth = headers['authorization'];
     return {
       isAuthorized: auth === `Bearer ${AUTH_TOKEN}`
     };
   })
-  .onBeforeHandle(({ isAuthorized, request, path }) => {
-    if (path === "/api/auth/login") return;
-    if (path.startsWith("/api") && !isAuthorized) {
+  .onBeforeHandle(({ isAuthorized, path }) => {
+    // 允许通过身份验证界面，不拦截静态文件，只拦截 API
+    if (path === "/api/auth/login" || !path.startsWith("/api")) return;
+    if (!isAuthorized) {
       return new Response("Unauthorized", { status: 401 });
     }
   })
+  
+  // 显式映射根路径
+  .get("/", () => Bun.file("public/index.html"))
+
   // --- Auth API ---
-  .post("/api/auth/login", ({ body }: { body: { token: string } }) => {
+  .post("/api/auth/login", ({ body }) => {
     if (body.token === AUTH_TOKEN) return { success: true };
     return new Response("Invalid Token", { status: 401 });
   }, { body: t.Object({ token: t.String() }) })
