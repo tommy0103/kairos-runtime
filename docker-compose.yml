@@ -49,13 +49,13 @@ services:
     working_dir: /workspace/src/dashboard
     user: root
     ports:
-      - "8080:8080"
+      - "18080:8080"
     volumes:
       - .:/workspace
       - /run/kairos-runtime:/run/kairos-runtime
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      DASHBOARD_AUTH_TOKEN: "${DASHBOARD_AUTH_TOKEN:-kairos-secret}"
+      DASHBOARD_AUTH_TOKEN: "${DASHBOARD_AUTH_TOKEN:-yukimochi0721}"
       MEMORY_FILES_ROOT: "/workspace/.runtime/memory_files"
     command: >
       bash -lc "
