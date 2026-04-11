@@ -3,11 +3,15 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
+import { gunzip } from "node:zlib";
+import { promisify } from "node:util";
 import sharp from "sharp";
 
 const DEFAULT_MAX_FRAMES = 5;
 const FRAME_FPS = 2;
 const EMOJI_MAX_EDGE = 512;
+const TGS_MIME_TYPE = "application/x-tgsticker";
+const gunzipAsync = promisify(gunzip);
 
 export interface Attachment {
   type: "sticker";
@@ -34,29 +38,77 @@ export async function extractFrames(
 
   const root = await mkdtemp(join(tmpdir(), "kairos-emoji-frames-"));
   const inputPath = join(root, `input${guessExtension(attachment.mimeType)}`);
+  const lottieJsonPath = join(root, "input-lottie.json");
   const outputPattern = join(root, "frame-%03d.png");
 
   try {
-    await writeFile(inputPath, buffer);
-    await runFfmpeg([
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-i",
-      inputPath,
-      "-vf",
-      `fps=${FRAME_FPS}`,
-      "-frames:v",
-      String(limit),
-      outputPattern,
-    ]);
-
-    const files = (await readdir(root))
-      .filter((name) => /^frame-\d+\.png$/.test(name))
-      .sort();
-    if (files.length === 0) {
-      throw new Error("no frames extracted");
+    if (isTgsSticker(attachment.mimeType)) {
+      const lottieJson = await tryInflateTgsToJson(buffer);
+      if (lottieJson) {
+        await writeFile(lottieJsonPath, lottieJson);
+        try {
+          await runFfmpeg([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lottie",
+            "-i",
+            lottieJsonPath,
+            "-vf",
+            `fps=${FRAME_FPS}`,
+            "-frames:v",
+            String(limit),
+            outputPattern,
+          ]);
+        } catch {
+          await cleanupExtractedFrames(root);
+          await writeFile(inputPath, buffer);
+          await runFfmpeg([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            inputPath,
+            "-vf",
+            `fps=${FRAME_FPS}`,
+            "-frames:v",
+            String(limit),
+            outputPattern,
+          ]);
+        }
+      } else {
+        await writeFile(inputPath, buffer);
+        await runFfmpeg([
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-i",
+          inputPath,
+          "-vf",
+          `fps=${FRAME_FPS}`,
+          "-frames:v",
+          String(limit),
+          outputPattern,
+        ]);
+      }
+    } else {
+      await writeFile(inputPath, buffer);
+      await runFfmpeg([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        inputPath,
+        "-vf",
+        `fps=${FRAME_FPS}`,
+        "-frames:v",
+        String(limit),
+        outputPattern,
+      ]);
     }
+
+    const files = await listExtractedFrames(root);
 
     const frames: Buffer[] = [];
     const timestamps: number[] = [];
@@ -107,11 +159,43 @@ function guessExtension(mimeType?: string): string {
       return ".mp4";
     case "image/gif":
       return ".gif";
-    case "application/x-tgsticker":
+    case TGS_MIME_TYPE:
       return ".tgs";
     default:
       return ".bin";
   }
+}
+
+function isTgsSticker(mimeType?: string): boolean {
+  return (mimeType ?? "").toLowerCase() === TGS_MIME_TYPE;
+}
+
+async function tryInflateTgsToJson(buffer: Buffer): Promise<Buffer | null> {
+  try {
+    const inflated = await gunzipAsync(buffer);
+    const probe = inflated.toString("utf8", 0, Math.min(inflated.length, 256)).trimStart();
+    if (!probe.startsWith("{")) {
+      return null;
+    }
+    return inflated;
+  } catch {
+    return null;
+  }
+}
+
+async function listExtractedFrames(root: string): Promise<string[]> {
+  const files = (await readdir(root))
+    .filter((name) => /^frame-\d+\.png$/.test(name))
+    .sort();
+  if (files.length === 0) {
+    throw new Error("no frames extracted");
+  }
+  return files;
+}
+
+async function cleanupExtractedFrames(root: string): Promise<void> {
+  const files = (await readdir(root)).filter((name) => /^frame-\d+\.png$/.test(name));
+  await Promise.all(files.map((name) => rm(join(root, name), { force: true })));
 }
 
 async function runFfmpeg(args: string[]): Promise<void> {
