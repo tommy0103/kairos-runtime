@@ -6,11 +6,14 @@ export type { TelegramConversationType, TelegramMessage };
 
 export interface StreamState {
   chatId: number;
-  // placeholderMessageId: number;  // Commented out: no longer sending placeholder
+  placeholderMessageId: number | null;
   conversationType: TelegramConversationType;
   username: string | null;
   replyToMessageId: number | null;
   replyToUserId: string | null;
+  statusText: string | null;
+  lastRenderedText: string;
+  lastFlushAtMs: number;
   chunks: string[];
 }
 
@@ -30,6 +33,7 @@ export interface TelegramAdapter {
     messageId?: number,
     placeholder?: string
   ) => Promise<number>;
+  setStreamStatus: (streamMessageId: number, status: string) => Promise<void>;
   appendStream: (streamMessageId: number, chunk: string) => void;
   endStream: (streamMessageId: number) => Promise<string>;
 }

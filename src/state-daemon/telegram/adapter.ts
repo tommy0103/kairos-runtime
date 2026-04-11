@@ -8,8 +8,10 @@ import type {
 import { markdownToTelegramHtml } from "./markdownToHtml";
 
 const DEFAULT_FINAL_TEXT = "(空内容)";
+const DEFAULT_STREAM_PLACEHOLDER = "Working on it... estimated 30-90 seconds.";
 const EDIT_RETRY_ATTEMPTS = 3;
 const EDIT_RETRY_DELAY_MS = 500;
+const STREAM_EDIT_THROTTLE_MS = 900;
 const MEDIA_GROUP_FLUSH_DELAY_MS = 250;
 
 export function createTelegramAdapter(token: string): TelegramAdapter {
@@ -42,25 +44,102 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     }
   };
 
-  const sendMessage = (
-    chatId: number,
-    text: string,
-    messageId?: number
-  ) => {
+  const toTelegramPayload = (text: string): { body: string; parseMode?: "HTML" } => {
     let htmlText: string | null = null;
     try {
       htmlText = markdownToTelegramHtml(text);
     } catch {
       // fall through
     }
-    const body = htmlText ?? text;
+    if (htmlText) {
+      return { body: htmlText, parseMode: "HTML" };
+    }
+    return { body: text };
+  };
+
+  const sendMessage = (
+    chatId: number,
+    text: string,
+    messageId?: number
+  ) => {
+    const payload = toTelegramPayload(text);
     const opts: Record<string, unknown> = {};
-    if (htmlText) opts.parse_mode = "HTML";
+    if (payload.parseMode) opts.parse_mode = payload.parseMode;
     const resolvedMessageId = toOptionalMessageId(messageId);
     if (resolvedMessageId !== undefined) {
       opts.reply_to_message_id = resolvedMessageId;
     }
-    return bot.api.sendMessage(chatId, body, opts as any);
+    return bot.api.sendMessage(chatId, payload.body, opts as any);
+  };
+
+  const editStreamMessageText = async (state: StreamState, text: string) => {
+    if (!state.placeholderMessageId) {
+      return null;
+    }
+    const payload = toTelegramPayload(text);
+    const opts: Record<string, unknown> = {};
+    if (payload.parseMode) {
+      opts.parse_mode = payload.parseMode;
+    }
+    return retry(
+      () =>
+        bot.api.editMessageText(
+          state.chatId,
+          state.placeholderMessageId,
+          payload.body,
+          opts as any
+        ),
+      EDIT_RETRY_ATTEMPTS,
+      EDIT_RETRY_DELAY_MS
+    );
+  };
+
+  const deleteStreamMessage = async (state: StreamState): Promise<void> => {
+    if (!state.placeholderMessageId) {
+      return;
+    }
+    try {
+      await bot.api.deleteMessage(state.chatId, state.placeholderMessageId);
+    } catch (error) {
+      console.warn("telegram delete placeholder failed:", error);
+    }
+  };
+
+  const renderStreamPreview = (state: StreamState): string => {
+    const content = state.chunks.join("");
+    if (content) {
+      if (state.statusText) {
+        return `${state.statusText}\n\n${content}\n\n...`;
+      }
+      return `${content}\n\n...`;
+    }
+    return state.statusText ?? DEFAULT_STREAM_PLACEHOLDER;
+  };
+
+  const flushStreamPreview = async (streamId: number, force = false) => {
+    const state = streams.get(streamId);
+    if (!state || !state.placeholderMessageId) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - state.lastFlushAtMs < STREAM_EDIT_THROTTLE_MS) {
+      return;
+    }
+    const previewText = renderStreamPreview(state);
+    if (!previewText || previewText === state.lastRenderedText) {
+      return;
+    }
+    state.lastFlushAtMs = now;
+    try {
+      await editStreamMessageText(state, previewText);
+      state.lastRenderedText = previewText;
+    } catch (error) {
+      if (isTelegramMessageNotModifiedError(error)) {
+        state.lastRenderedText = previewText;
+        return;
+      }
+      console.error("telegram stream preview edit failed:", error);
+    }
   };
 
   const dispatchMessage = (message: TelegramMessage) => {
@@ -91,6 +170,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
   const startStream: TelegramAdapter["startStream"] = async (
     chatId,
     messageId,
+    placeholder,
   ) => {
     // 设置原生正在输入状态
     void setTyping(chatId);
@@ -103,16 +183,48 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     }, 4000);
     typingIntervals.set(streamId, typingInterval);
 
+    const initialStatus = (placeholder?.trim() || DEFAULT_STREAM_PLACEHOLDER).trim();
+    let placeholderMessageId: number | null = null;
+    let conversationType: TelegramConversationType = "private";
+    let username: string | null = null;
+    try {
+      const sent = await sendMessage(chatId, initialStatus, messageId ?? undefined);
+      placeholderMessageId = sent.message_id;
+      conversationType = toConversationType(sent.chat.type);
+      username = sent.from?.username ?? null;
+    } catch (error) {
+      console.error("telegram startStream placeholder send failed:", error);
+    }
+
     streams.set(streamId, {
       chatId,
-      conversationType: "private",
-      username: null,
+      placeholderMessageId,
+      conversationType,
+      username,
       replyToMessageId: messageId ?? null,
       replyToUserId: null,
+      statusText: initialStatus,
+      lastRenderedText: placeholderMessageId ? initialStatus : "",
+      lastFlushAtMs: Date.now(),
       chunks: [],
     });
-    console.log("startStream", streams.get(streamId));
     return streamId;
+  };
+
+  const setStreamStatus: TelegramAdapter["setStreamStatus"] = async (
+    streamId,
+    status
+  ) => {
+    const state = streams.get(streamId);
+    if (!state) {
+      throw new Error(`stream not started for streamId: ${streamId}`);
+    }
+    const normalized = status.trim();
+    if (!normalized || normalized === state.statusText) {
+      return;
+    }
+    state.statusText = normalized;
+    await flushStreamPreview(streamId, true);
   };
 
   const appendStream: TelegramAdapter["appendStream"] = (streamId, chunk) => {
@@ -122,7 +234,10 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     }
     state.chunks.push(chunk);
     // 每收到 5 个 chunk 刷新一次 typing 状态
-    if (state.chunks.length % 5 === 0) void setTyping(state.chatId);
+    if (state.chunks.length % 5 === 0) {
+      void setTyping(state.chatId);
+    }
+    void flushStreamPreview(streamId);
   };
 
   const endStream: TelegramAdapter["endStream"] = async (streamId) => {
@@ -140,7 +255,15 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     const finalText = state.chunks.join("") || DEFAULT_FINAL_TEXT;
 
     try {
-      const sent = await sendMessage(state.chatId, finalText, state.replyToMessageId ?? undefined);
+      if (state.placeholderMessageId) {
+        await deleteStreamMessage(state);
+      }
+
+      const sent = await sendMessage(
+        state.chatId,
+        finalText,
+        state.replyToMessageId ?? undefined
+      );
       const outgoing = toOutgoingTelegramMessage(sent);
       if (outgoing) {
         dispatchMessage(outgoing);
@@ -273,6 +396,7 @@ export function createTelegramAdapter(token: string): TelegramAdapter {
     onEditedMessage,
     reply,
     startStream,
+    setStreamStatus,
     appendStream,
     endStream,
   };
@@ -385,6 +509,9 @@ function toEditedResultMessage(
   };
 
   if (result === true) {
+    if (!state.placeholderMessageId) {
+      return null;
+    }
     return {
       userId: "bot",
       messageId: state.placeholderMessageId,
@@ -533,6 +660,17 @@ function isRetryableNetworkError(error: unknown): boolean {
     lowerMessage.includes("fetch failed") ||
     lowerMessage.includes("network error")
   );
+}
+
+function isTelegramMessageNotModifiedError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string") {
+    return false;
+  }
+  return message.toLowerCase().includes("message is not modified");
 }
 
 async function resolvePhotoUrls(

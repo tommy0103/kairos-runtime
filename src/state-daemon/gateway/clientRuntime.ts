@@ -14,12 +14,29 @@ import { createOllamaLocalModel, createOpenAICloudModel } from "../model/llm";
 import { createDenseEmbedder } from "../model/embedding";
 import { system } from "./context";
 
+export type RuntimeReplyStage =
+  | "retrieving_context"
+  | "generating"
+  | "tool_call"
+  | "streaming";
+
+export type RuntimeReplyStreamEvent =
+  | {
+      type: "status_update";
+      stage: RuntimeReplyStage;
+      text: string;
+    }
+  | {
+      type: "message_delta";
+      delta: string;
+    };
+
 export interface ClientRuntime {
   recordMessage: (message: TelegramMessage) => Promise<void>;
   streamReply: (input: {
     triggerMessage: TelegramMessage;
     prompt: string;
-  }) => AsyncIterable<string>;
+  }) => AsyncIterable<RuntimeReplyStreamEvent>;
 }
 
 export interface CreateClientRuntimeOptions {
@@ -51,6 +68,44 @@ const SESSION_DEBUG_LOG_PATH = join(
   ".memoh-debug",
   "session-control-blocks.log"
 );
+const LONG_RUNNING_STATUS_INTERVAL_MS = 15000;
+
+function statusTextForToolStart(toolName: string): string {
+  switch (toolName) {
+    case "fetch_webpage":
+      return "Checking web sources...";
+    case "read_file_safe":
+      return "Reading project files...";
+    case "list_files_safe":
+      return "Scanning project structure...";
+    case "run_safe_bash":
+      return "Running workspace command...";
+    case "write_file_safe":
+      return "Applying file updates...";
+    case "evolute":
+      return "Preparing dynamic capability...";
+    case "apoptosis":
+      return "Cleaning up obsolete capability...";
+    default:
+      return `Using tool: ${toolName}`;
+  }
+}
+
+function statusTextForToolEnd(toolName: string): string {
+  switch (toolName) {
+    case "fetch_webpage":
+      return "Web lookup complete, continuing generation...";
+    case "read_file_safe":
+    case "list_files_safe":
+      return "Context collected, continuing generation...";
+    case "run_safe_bash":
+      return "Command finished, reviewing output...";
+    case "write_file_safe":
+      return "File update done, continuing response...";
+    default:
+      return "Tool step finished, continuing generation...";
+  }
+}
 
 export function createClientRuntime(options: CreateClientRuntimeOptions): ClientRuntime {
   const enclaveClient =
@@ -96,27 +151,78 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
   };
 
   const streamReply: ClientRuntime["streamReply"] = ({ triggerMessage, prompt }) => {
-    const stream = new RemoteAsyncIterable<string>();
-    const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
-      chatId: triggerMessage.chatId,
-      messageId: triggerMessage.messageId,
-    });
-    const llmMessages = contextAssembler.build({
-      contextMessages: sessionMessages,
-      recentMessages,
-      triggerMessage,
-      systemPrompt: system(),
-    });
-    // console.log("llmMessages", llmMessages);
+    const stream = new RemoteAsyncIterable<RuntimeReplyStreamEvent>();
     void (async () => {
+      let longRunningTicker: ReturnType<typeof setInterval> | null = null;
+      const startedAt = Date.now();
       try {
+        stream.push({
+          type: "status_update",
+          stage: "retrieving_context",
+          text: "Retrieving memory and conversation context...",
+        });
+
+        const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
+          chatId: triggerMessage.chatId,
+          messageId: triggerMessage.messageId,
+        });
+        const llmMessages = contextAssembler.build({
+          contextMessages: sessionMessages,
+          recentMessages,
+          triggerMessage,
+          systemPrompt: system(),
+        });
+
+        stream.push({
+          type: "status_update",
+          stage: "generating",
+          text: "Generating response...",
+        });
+
+        longRunningTicker = setInterval(() => {
+          const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+          stream.push({
+            type: "status_update",
+            stage: "generating",
+            text: `Still working (${elapsedSeconds}s elapsed)...`,
+          });
+        }, LONG_RUNNING_STATUS_INTERVAL_MS);
+
+        let startedStreamingText = false;
         for await (const event of enclaveClient.streamReply({
           chatId: triggerMessage.chatId,
           messages: llmMessages,
           imageUrls: triggerMessage.imageUrls,
         })) {
+          if (event.type === "tool_execution_start") {
+            stream.push({
+              type: "status_update",
+              stage: "tool_call",
+              text: statusTextForToolStart(event.toolName),
+            });
+            continue;
+          }
+          if (event.type === "tool_execution_end") {
+            stream.push({
+              type: "status_update",
+              stage: "generating",
+              text: statusTextForToolEnd(event.toolName),
+            });
+            continue;
+          }
           if (event.type === "message_update" && event.role === "assistant" && event.delta) {
-            stream.push(event.delta);
+            if (!startedStreamingText) {
+              stream.push({
+                type: "status_update",
+                stage: "streaming",
+                text: "Streaming reply...",
+              });
+              startedStreamingText = true;
+            }
+            stream.push({
+              type: "message_delta",
+              delta: event.delta,
+            });
             continue;
           }
           if (event.type === "failed") {
@@ -126,8 +232,16 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
             break;
           }
         }
+        if (longRunningTicker) {
+          clearInterval(longRunningTicker);
+          longRunningTicker = null;
+        }
         stream.end();
       } catch (error) {
+        if (longRunningTicker) {
+          clearInterval(longRunningTicker);
+          longRunningTicker = null;
+        }
         stream.fail(error);
       }
     })();

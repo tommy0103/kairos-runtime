@@ -6,6 +6,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_FINAL_TEXT = "(空内容)";
+const DEFAULT_STREAM_PLACEHOLDER = "Working on it... estimated 30-90 seconds.";
+const STREAM_EDIT_THROTTLE_MS = 1200;
 const MEDIA_GROUP_FLUSH_DELAY_MS = 300;
 
 export function createUserBotAdapter(options: any): TelegramAdapter {
@@ -137,6 +139,63 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     };
   };
 
+  const renderStreamPreview = (state: StreamState): string => {
+    const content = state.chunks.join("");
+    if (content) {
+      if (state.statusText) {
+        return `${state.statusText}\n\n${content}\n\n...`;
+      }
+      return `${content}\n\n...`;
+    }
+    return state.statusText ?? DEFAULT_STREAM_PLACEHOLDER;
+  };
+
+  const editStreamMessage = async (state: StreamState, text: string) => {
+    if (!state.placeholderMessageId) {
+      return;
+    }
+    const target = await getSafeEntity(state.chatId);
+    await (client as any).editMessage(target, {
+      message: state.placeholderMessageId,
+      text,
+    });
+    state.lastRenderedText = text;
+    state.lastFlushAtMs = Date.now();
+  };
+
+  const deleteStreamMessage = async (state: StreamState): Promise<void> => {
+    if (!state.placeholderMessageId) {
+      return;
+    }
+    try {
+      const target = await getSafeEntity(state.chatId);
+      await (client as any).deleteMessages(target, [state.placeholderMessageId], {
+        revoke: true,
+      });
+    } catch (error) {
+      console.warn("[userbot] failed to delete stream placeholder:", error);
+    }
+  };
+
+  const flushStreamPreview = async (state: StreamState, force = false) => {
+    if (!state.placeholderMessageId) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - state.lastFlushAtMs < STREAM_EDIT_THROTTLE_MS) {
+      return;
+    }
+    const preview = renderStreamPreview(state);
+    if (!preview || preview === state.lastRenderedText) {
+      return;
+    }
+    try {
+      await editStreamMessage(state, preview);
+    } catch (error) {
+      console.warn("[userbot] stream preview edit failed:", error);
+    }
+  };
+
 
   return {
     start: async () => {
@@ -201,25 +260,70 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       const sent = await client.sendMessage(target, { message: text, replyTo: messageId });
       if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
     },
-    startStream: async (chatId, messageId) => {
+    startStream: async (chatId, messageId, placeholder) => {
       void setTyping(chatId);
       const streamId = nextStreamId++;
-      streams.set(streamId, { chatId, placeholderMessageId: 0, conversationType: "group", username: null, replyToMessageId: messageId || null, replyToUserId: null, chunks: [] });
+      const initialStatus = (placeholder?.trim() || DEFAULT_STREAM_PLACEHOLDER).trim();
+      let placeholderMessageId: number | null = null;
+      try {
+        const target = await getSafeEntity(chatId);
+        const sent = await client.sendMessage(target, {
+          message: initialStatus,
+          replyTo: messageId || undefined,
+        });
+        if (sent instanceof Api.Message) {
+          placeholderMessageId = sent.id;
+          sentMessageIds.add(sent.id);
+        }
+      } catch (error) {
+        console.warn("[userbot] failed to send stream placeholder:", error);
+      }
+
+      streams.set(streamId, {
+        chatId,
+        placeholderMessageId,
+        conversationType: "group",
+        username: null,
+        replyToMessageId: messageId || null,
+        replyToUserId: null,
+        statusText: initialStatus,
+        lastRenderedText: placeholderMessageId ? initialStatus : "",
+        lastFlushAtMs: Date.now(),
+        chunks: [],
+      });
       return streamId;
+    },
+    setStreamStatus: async (id, status) => {
+      const s = streams.get(id);
+      if (!s) return;
+      const normalized = status.trim();
+      if (!normalized || normalized === s.statusText) {
+        return;
+      }
+      s.statusText = normalized;
+      await flushStreamPreview(s, true);
     },
     appendStream: (id, c) => {
       const s = streams.get(id);
       if (s) {
         s.chunks.push(c);
         if (s.chunks.length % 5 === 0) void setTyping(s.chatId);
+        void flushStreamPreview(s);
       }
     },
     endStream: async (id) => {
       const s = streams.get(id);
       if (!s) return "";
       const text = s.chunks.join("") || DEFAULT_FINAL_TEXT;
+      if (s.placeholderMessageId) {
+        await deleteStreamMessage(s);
+      }
+
       const target = await getSafeEntity(s.chatId);
-      const sent = await client.sendMessage(target, { message: text, replyTo: s.replyToMessageId || undefined });
+      const sent = await client.sendMessage(target, {
+        message: text,
+        replyTo: s.replyToMessageId || undefined,
+      });
       if (sent instanceof Api.Message) {
         sentMessageIds.add(sent.id);
         console.log(`[userbot] Record sent message ID: ${sent.id}`);

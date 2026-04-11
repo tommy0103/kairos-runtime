@@ -1,4 +1,4 @@
-import type { ClientRuntime } from "./clientRuntime";
+import type { ClientRuntime, RuntimeReplyStreamEvent } from "./clientRuntime";
 import type { TelegramAdapter } from "../telegram/types";
 import type { TelegramMessage } from "../types/message";
 import type {
@@ -83,15 +83,14 @@ class SocialEtiquetteManager {
   getInstruction(state: SocialState): string {
     switch (state) {
       case "CONCISE":
-        return "\n\n【系统提示：当前对话已持续较久，请精简你的回答，避免展开复杂话题。】";
+        return "\n\n[System note: This conversation is getting long. Keep the reply concise.]";
       case "WRAP_UP":
-        return "\n\n【系统提示：当前对话已过长。请礼貌地找个借口结束本次对话（例如：要去忙了、去休息了等），不要再引导对方继续聊下去。】";
+        return "\n\n[System note: This conversation is very long. Politely wrap up and avoid extending it.]";
       default:
         return "";
     }
   }
 }
-
 export interface CreateMessageGatewayOptions {
   telegram: TelegramAdapter;
   runtime: ClientRuntime;
@@ -103,6 +102,37 @@ export interface CreateMessageGatewayOptions {
 
 export interface MessageGateway {
   stop: () => void;
+}
+
+const LONG_WAIT_STATUS_DELAY_MS = 120000;
+
+function estimateReplyEtaSeconds(message: TelegramMessage): { min: number; max: number } {
+  let min = 30;
+  let max = 90;
+  const hasImage = (message.imageUrls?.length ?? 0) > 0;
+  if (hasImage) {
+    min += 20;
+    max += 50;
+  }
+  const textLength = message.context.trim().length;
+  if (textLength > 400) {
+    min += 10;
+    max += 25;
+  }
+  if (textLength > 1200) {
+    min += 15;
+    max += 40;
+  }
+  return { min, max };
+}
+
+function toEtaHintText(eta: { min: number; max: number }): string {
+  if (eta.max >= 120) {
+    const minMinutes = Math.max(1, Math.floor(eta.min / 60));
+    const maxMinutes = Math.max(minMinutes + 1, Math.ceil(eta.max / 60));
+    return `Estimated ${minMinutes}-${maxMinutes} minutes.`;
+  }
+  return `Estimated ${eta.min}-${eta.max} seconds.`;
 }
 
 export function createMessageGateway(
@@ -181,30 +211,60 @@ export function createMessageGateway(
 
     const instruction = etiquetteManager.getInstruction(socialState);
 
+    const eta = estimateReplyEtaSeconds(message);
     const streamMessageId = await options.telegram.startStream(
       message.chatId,
-      message.messageId
+      message.messageId,
+      `Working on it... ${toEtaHintText(eta)}`
     );
+    let lastStatus = "";
+    const applyStatus = (event: RuntimeReplyStreamEvent | string) => {
+      const text = typeof event === "string"
+        ? event
+        : event.type === "status_update"
+          ? event.text
+          : "";
+      const normalized = text.trim();
+      if (!normalized || normalized === lastStatus) {
+        return;
+      }
+      lastStatus = normalized;
+      void options.telegram.setStreamStatus(streamMessageId, normalized).catch((error) => {
+        console.error("message gateway setStreamStatus failed:", error);
+      });
+    };
+    const longWaitTimer = setTimeout(() => {
+      applyStatus(
+        "This is taking longer than usual. Feel free to do something else; I will post the final reply when done."
+      );
+    }, LONG_WAIT_STATUS_DELAY_MS);
 
     try {
       let hasOutput = false;
-      for await (const chunk of options.runtime.streamReply({
+      for await (const event of options.runtime.streamReply({
         triggerMessage: message,
         prompt: decision.prompt + instruction,
       })) {
-        options.telegram.appendStream(streamMessageId, chunk);
+        if (event.type === "status_update") {
+          applyStatus(event);
+          continue;
+        }
+        options.telegram.appendStream(streamMessageId, event.delta);
         hasOutput = true;
       }
       if (!hasOutput) {
         options.telegram.appendStream(
           streamMessageId,
-          "\n(模型本轮未返回可显示文本，请重试或调整提示词)"
+          "\n(Model returned no displayable text in this turn. Please retry.)"
         );
       }
       await options.telegram.endStream(streamMessageId);
     } catch (error) {
       try {
-        options.telegram.appendStream(streamMessageId, "\n(生成失败，请稍后重试)");
+        options.telegram.appendStream(
+          streamMessageId,
+          "\n(Generation failed, please retry in a moment.)"
+        );
       } catch {
       }
       try {
@@ -213,11 +273,13 @@ export function createMessageGateway(
         console.error("message gateway endStream failed:", endError);
         await options.telegram.reply(
           message.chatId,
-          "生成失败，请稍后重试。",
+          "Generation failed, please retry in a moment.",
           message.messageId
         );
       }
       console.error("message gateway stream failed:", error);
+    } finally {
+      clearTimeout(longWaitTimer);
     }
   };
 
