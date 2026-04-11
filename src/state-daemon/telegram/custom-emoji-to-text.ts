@@ -16,15 +16,6 @@ export interface CustomEmojiToTextResolver {
 
 const emojiCacheKey = (customEmojiId: string): string => `emoji:${customEmojiId}`;
 
-type StickerMeta = {
-  id: string;
-  file_id: string;
-  is_animated: boolean;
-  is_video: boolean;
-  mime_type?: string;
-  set_name?: string;
-};
-
 const prepareStaticImageUrl = async (buffer: Buffer): Promise<string> => {
   const resized = await sharp(buffer)
     .resize(EMOJI_MAX_EDGE, EMOJI_MAX_EDGE, {
@@ -43,7 +34,14 @@ export function createCustomEmojiToTextResolver(params: {
   maxFrames?: number;
   lookupByHash: (hash: string) => ImageAltTextRecord | null;
   persist: (record: ImageAltTextRecord) => void;
-  getCustomEmojiStickers: (customEmojiIds: string[]) => Promise<StickerMeta[]>;
+  getCustomEmojiStickers: (customEmojiIds: string[]) => Promise<Array<{
+    id: string;
+    file_id: string;
+    is_animated: boolean;
+    is_video: boolean;
+    mime_type?: string;
+    set_name?: string;
+  }>>;
   downloadFile: (fileId: string) => Promise<Buffer>;
   resolvePackTitle: (setName: string) => Promise<string | undefined>;
 }): CustomEmojiToTextResolver {
@@ -55,7 +53,13 @@ export function createCustomEmojiToTextResolver(params: {
   const resolveOne = (
     customEmojiId: string,
     fallbackEmoji: string,
-    sticker: Omit<StickerMeta, "id">
+    sticker: {
+      file_id: string;
+      is_animated: boolean;
+      is_video: boolean;
+      mime_type?: string;
+      set_name?: string;
+    }
   ): Promise<void> => {
     const cacheKey = emojiCacheKey(customEmojiId);
 
@@ -101,42 +105,32 @@ export function createCustomEmojiToTextResolver(params: {
           packNames.set(customEmojiId, sticker.set_name);
         }
 
-        let images: Array<{ url: string }> = [];
+        let images: Array<{ url: string }>;
         let frameCount: number | undefined;
         let timestamps: string | undefined;
 
         if (isAnimated) {
-          try {
-            const syntheticAtt: Attachment = {
-              type: "sticker",
-              isAnimatedSticker: sticker.is_animated,
-              isVideoSticker: sticker.is_video,
-              mimeType: sticker.mime_type,
-            };
-            const extractionResult = await extractFrames(buffer, syntheticAtt, params.maxFrames);
-            const uniqueFrames = deduplicateFrames(extractionResult.frames);
-            if (uniqueFrames.length === 1) {
-              isAnimated = false;
-            }
-            images = uniqueFrames.map((buf) => ({
-              url: `data:image/png;base64,${buf.toString("base64")}`,
-            }));
-            frameCount = uniqueFrames.length;
-            timestamps = extractionResult.frameTimestamps
-              ? extractionResult.frameTimestamps.map((t) => `${t.toFixed(1)}s`).join(", ")
-              : undefined;
-          } catch {
-            // Fall back to metadata-only description path below.
+          const syntheticAtt: Attachment = {
+            type: "sticker",
+            isAnimatedSticker: sticker.is_animated,
+            isVideoSticker: sticker.is_video,
+            mimeType: sticker.mime_type,
+          };
+          const extractionResult = await extractFrames(buffer, syntheticAtt, params.maxFrames);
+          const uniqueFrames = deduplicateFrames(extractionResult.frames);
+          if (uniqueFrames.length === 1) {
+            isAnimated = false;
           }
-        }
-
-        if (images.length === 0) {
-          try {
-            const url = await prepareStaticImageUrl(buffer);
-            images = [{ url }];
-          } catch {
-            // Keep images empty for metadata-only description.
-          }
+          images = uniqueFrames.map((buf) => ({
+            url: `data:image/png;base64,${buf.toString("base64")}`,
+          }));
+          frameCount = uniqueFrames.length;
+          timestamps = extractionResult.frameTimestamps
+            ? extractionResult.frameTimestamps.map((t) => `${t.toFixed(1)}s`).join(", ")
+            : undefined;
+        } else {
+          const url = await prepareStaticImageUrl(buffer);
+          images = [{ url }];
         }
 
         const system = renderCustomEmojiToTextSystemPrompt({
@@ -147,41 +141,22 @@ export function createCustomEmojiToTextResolver(params: {
           frameTimestamps: timestamps,
         });
 
-        let altText = "";
-        let outputTokens: number | undefined;
-        try {
-          const result = await callDescriptionLlm({
-            model,
-            system,
-            userText:
-              images.length > 0
-                ? "Describe this custom emoji."
-                : "Describe this custom emoji from fallback emoji and sticker metadata only.",
-            images,
-            label: "custom-emoji-to-text",
-          });
-          altText = result.text.trim();
-          outputTokens = result.outputTokens;
-        } catch {
-          // LLM call failed; use deterministic fallback below.
-        }
-
+        const result = await callDescriptionLlm({
+          model,
+          system,
+          userText: "Describe this custom emoji.",
+          images,
+          label: "custom-emoji-to-text",
+        });
+        const altText = result.text.trim();
         if (!altText) {
-          altText = buildHeuristicAltText({
-            fallbackEmoji,
-            stickerSetName: packTitle ?? sticker.set_name,
-            isAnimated,
-          });
-        }
-
-        if (!altText) {
-          throw new Error("Custom-emoji-to-text resolved empty alt text");
+          throw new Error("Custom-emoji-to-text model returned empty alt text");
         }
 
         params.persist({
           imageHash: cacheKey,
           altText,
-          altTextTokens: outputTokens,
+          altTextTokens: result.outputTokens,
           ...(packTitle ?? sticker.set_name ? { stickerSetName: packTitle ?? sticker.set_name } : {}),
         });
         errors.delete(customEmojiId);
@@ -217,7 +192,14 @@ export function createCustomEmojiToTextResolver(params: {
       }
 
       const ids = [...uncached.keys()];
-      const stickers: StickerMeta[] = [];
+      const stickers: Array<{
+        id: string;
+        file_id: string;
+        is_animated: boolean;
+        is_video: boolean;
+        mime_type?: string;
+        set_name?: string;
+      }> = [];
       const batches = chunkBy(ids, BOT_API_CUSTOM_EMOJI_BATCH_LIMIT);
       for (const batch of batches) {
         try {
@@ -225,7 +207,7 @@ export function createCustomEmojiToTextResolver(params: {
           stickers.push(...batchStickers);
         } catch (err) {
           for (const id of batch) {
-            errors.set(id, toPublicErrorText(err));
+            errors.set(id, err instanceof Error ? err.message : String(err));
           }
         }
       }
@@ -233,7 +215,7 @@ export function createCustomEmojiToTextResolver(params: {
         return;
       }
 
-      const stickerMap = new Map<string, StickerMeta>();
+      const stickerMap = new Map<string, typeof stickers[0]>();
       for (const sticker of stickers) {
         stickerMap.set(sticker.id, sticker);
       }
@@ -245,10 +227,9 @@ export function createCustomEmojiToTextResolver(params: {
           errors.set(id, "sticker not found");
           continue;
         }
-        const { id: _id, ...stickerData } = sticker;
         tasks.push(
-          resolveOne(id, fallback, stickerData).catch((err) => {
-            errors.set(id, toPublicErrorText(err));
+          resolveOne(id, fallback, sticker).catch((err) => {
+            errors.set(id, err instanceof Error ? err.message : String(err));
           })
         );
       }
@@ -267,45 +248,6 @@ export function createCustomEmojiToTextResolver(params: {
       return params.lookupByHash(emojiCacheKey(customEmojiId))?.altText;
     },
   };
-}
-
-function buildHeuristicAltText(params: {
-  fallbackEmoji: string;
-  stickerSetName?: string;
-  isAnimated: boolean;
-}): string {
-  const fallback = params.fallbackEmoji.trim();
-  if (fallback) {
-    if (params.stickerSetName) {
-      return `${fallback} (custom emoji from ${params.stickerSetName})`;
-    }
-    return fallback;
-  }
-  if (params.stickerSetName) {
-    return `custom emoji from ${params.stickerSetName}`;
-  }
-  return params.isAnimated ? "animated custom emoji" : "custom emoji";
-}
-
-function toPublicErrorText(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const normalized = raw.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "custom emoji description unavailable";
-  }
-  const lowered = normalized.toLowerCase();
-  if (
-    lowered.includes("invalid data found when processing input") ||
-    lowered.includes("no frames extracted") ||
-    lowered.includes("unknown input format") ||
-    lowered.includes("ffmpeg")
-  ) {
-    return "custom emoji frame extraction failed";
-  }
-  if (normalized.length > 180) {
-    return `${normalized.slice(0, 177)}...`;
-  }
-  return normalized;
 }
 
 function chunkBy<T>(items: T[], size: number): T[][] {
