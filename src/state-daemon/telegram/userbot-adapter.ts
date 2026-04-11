@@ -3,14 +3,38 @@ import { StringSession } from "telegram/sessions";
 import { NewMessage } from "telegram/events";
 import type { TelegramAdapter, TelegramMessage, StreamState } from "./types";
 import fs from "node:fs/promises";
-import path from "node:path";
+import { createCustomEmojiToTextResolver } from "./custom-emoji-to-text";
+import { createImageAltTextStore } from "./image-to-text-store";
+import type { CustomEmojiToTextConfig } from "./index";
 
-const DEFAULT_FINAL_TEXT = "(空内容)";
+const DEFAULT_FINAL_TEXT = "(empty)";
 const DEFAULT_STREAM_PLACEHOLDER = "Working on it... estimated 30-90 seconds.";
 const STREAM_EDIT_THROTTLE_MS = 1200;
 const MEDIA_GROUP_FLUSH_DELAY_MS = 300;
 
-export function createUserBotAdapter(options: any): TelegramAdapter {
+interface CustomEmojiOccurrence {
+  customEmojiId: string;
+  fallbackEmoji: string;
+  offset: number;
+  length: number;
+}
+
+interface ResolvedCustomEmojiInfo {
+  packName?: string;
+  altText?: string;
+  errorText?: string;
+}
+
+export interface UserBotAdapterOptions {
+  apiId: number;
+  apiHash: string;
+  phoneNumber?: string;
+  password?: string;
+  sessionString?: string;
+  customEmojiToText?: CustomEmojiToTextConfig;
+}
+
+export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAdapter {
   const client = new TelegramClient(new StringSession(options.sessionString || ""), options.apiId, options.apiHash, { connectionRetries: 10, useWSS: false, autoReconnect: true });
   const sentMessageIds = new Set<number>();
   const streams = new Map<number, StreamState>();
@@ -18,7 +42,7 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
   const messageHandlers = new Set<any>();
   let me: Api.User | null = null;
 
-  // 媒体组缓存，参照 adapter.ts
+  // Media-group cache, aligned with adapter.ts behavior.
   const pendingMediaGroups = new Map<
     string,
     {
@@ -28,6 +52,149 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  const stickerSetNameCache = new Map<string, string | null>();
+  const documentCache = new Map<string, Api.Document>();
+
+  const resolveStickerSetName = async (stickerSet: Api.TypeInputStickerSet): Promise<string | undefined> => {
+    if (stickerSet instanceof Api.InputStickerSetShortName) {
+      const shortName = stickerSet.shortName?.trim() || "";
+      if (shortName) {
+        return shortName;
+      }
+    }
+
+    const key = buildStickerSetCacheKey(stickerSet);
+    if (!key) {
+      return undefined;
+    }
+    if (stickerSetNameCache.has(key)) {
+      return stickerSetNameCache.get(key) ?? undefined;
+    }
+
+    try {
+      const result = await client.invoke(
+        new Api.messages.GetStickerSet({
+          stickerset: stickerSet,
+          hash: 0,
+        })
+      );
+      if (result instanceof Api.messages.StickerSet && result.set instanceof Api.StickerSet) {
+        const title = result.set.title?.trim() || "";
+        const shortName = result.set.shortName?.trim() || "";
+        const resolved = title || shortName || null;
+        stickerSetNameCache.set(key, resolved);
+        return resolved ?? undefined;
+      }
+      stickerSetNameCache.set(key, null);
+      return undefined;
+    } catch (error) {
+      console.warn("[userbot] GetStickerSet failed:", error);
+      stickerSetNameCache.set(key, null);
+      return undefined;
+    }
+  };
+
+  const customEmojiStore = createImageAltTextStore(options.customEmojiToText?.dbPath);
+  customEmojiStore.hydrate();
+
+  const customEmojiResolver = createCustomEmojiToTextResolver({
+    enabled: options.customEmojiToText?.enabled ?? false,
+    model: options.customEmojiToText?.model
+      ? {
+          model: options.customEmojiToText.model,
+          baseURL: options.customEmojiToText.baseURL,
+          apiKey: options.customEmojiToText.apiKey,
+        }
+      : undefined,
+    maxConcurrency: options.customEmojiToText?.maxConcurrency,
+    maxFrames: options.customEmojiToText?.maxFrames,
+    lookupByHash: customEmojiStore.lookupByHash,
+    persist: customEmojiStore.persist,
+    getCustomEmojiStickers: async (customEmojiIds) => {
+      const docIds = customEmojiIds
+        .map((item) => parseDocumentId(item))
+        .filter((item): item is string => item !== null);
+      if (docIds.length === 0) {
+        return [];
+      }
+
+      const documents = await client.invoke(
+        new Api.messages.GetCustomEmojiDocuments({
+          documentId: docIds as any,
+        })
+      );
+
+      const results: Array<{
+        id: string;
+        file_id: string;
+        is_animated: boolean;
+        is_video: boolean;
+        mime_type?: string;
+        set_name?: string;
+      }> = [];
+      for (const document of documents) {
+        if (!(document instanceof Api.Document)) {
+          continue;
+        }
+        const id = document.id.toString();
+        documentCache.set(id, document);
+        const mimeType = document.mimeType || undefined;
+
+        let setName: string | undefined;
+        let isAnimated = mimeType === "application/x-tgsticker";
+        let isVideo = mimeType === "video/webm" || mimeType === "video/mp4";
+        for (const attribute of document.attributes) {
+          if (attribute instanceof Api.DocumentAttributeCustomEmoji) {
+            setName = await resolveStickerSetName(attribute.stickerset);
+            continue;
+          }
+          if (attribute instanceof Api.DocumentAttributeAnimated) {
+            isAnimated = true;
+          }
+          if (attribute instanceof Api.DocumentAttributeVideo) {
+            isVideo = true;
+          }
+        }
+
+        results.push({
+          id,
+          file_id: id,
+          is_animated: isAnimated,
+          is_video: isVideo,
+          mime_type: mimeType,
+          set_name: setName,
+        });
+      }
+      return results;
+    },
+    downloadFile: async (fileId) => {
+      const existing = documentCache.get(fileId);
+      let document = existing;
+      if (!document) {
+        const documents = await client.invoke(
+          new Api.messages.GetCustomEmojiDocuments({
+            documentId: [fileId as any],
+          })
+        );
+        for (const item of documents) {
+          if (item instanceof Api.Document && item.id.toString() === fileId) {
+            document = item;
+            documentCache.set(fileId, item);
+            break;
+          }
+        }
+      }
+      if (!document) {
+        throw new Error(`document not found for custom emoji id: ${fileId}`);
+      }
+      const media = await client.downloadMedia(document as any, { workers: 1 } as any);
+      if (!(media instanceof Buffer)) {
+        throw new Error(`failed to download document buffer for ${fileId}`);
+      }
+      return media;
+    },
+    resolvePackTitle: async (setName) => setName,
+  });
 
   const getSafeEntity = async (id: any) => {
     const ids = [id, id.toString()];
@@ -35,7 +202,7 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     for (const target of ids) {
       try { return await client.getEntity(target); } catch {}
     }
-    try { return await client.getEntity(BigInt(id)); } catch {}
+    try { return await client.getEntity(BigInt(id) as any); } catch {}
     throw new Error("Could not find entity for " + id);
   };
 
@@ -52,7 +219,7 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
   const downloadPhoto = async (msg: Api.Message): Promise<string | null> => {
     if (!(msg.media instanceof Api.MessageMediaPhoto)) return null;
     try {
-      const buffer = await client.downloadMedia(msg.media, { workers: 1 });
+      const buffer = await client.downloadMedia(msg.media as any, { workers: 1 } as any);
       if (buffer && buffer instanceof Buffer) {
         const fileName = `vision-${msg.peerId?.toJSON()}-${msg.id}.jpg`;
         const filePath = `/tmp/kairos-vision/${fileName}`;
@@ -89,31 +256,35 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
                    (msg.peerId instanceof Api.PeerChannel ? msg.peerId.channelId.toJSNumber() : 0));
 
     const conversationType = msg.peerId instanceof Api.PeerUser ? "private" : "group";
-    const replyToMsgId = msg.replyTo instanceof Api.MessageReplyHeader ? msg.replyTo.replyToMsgId : null;
+    const replyToMsgIdRaw =
+      msg.replyTo instanceof Api.MessageReplyHeader ? msg.replyTo.replyToMsgId : null;
+    const replyToMsgId = typeof replyToMsgIdRaw === "number" ? replyToMsgIdRaw : null;
     
     const myUsername = (me.username || "").toLowerCase();
     const text = (msg.message || "").toLowerCase();
     
-    // 判定 Mention：私聊 100% 触发，或者文本包含关键词
-    const isMentionMe = conversationType === "private" || 
-                        (myUsername && text.includes(myUsername)) ||
+    // Mention heuristic: always trigger in private chats, or when keywords match.
+    const isMentionMe = conversationType === "private" ||
+                        (myUsername ? text.includes(myUsername) : false) ||
                         text.includes("yuki") || text.includes("mochi") ||
-                        (me.firstName && text.includes(me.firstName.toLowerCase()));
+                        (me.firstName ? text.includes(me.firstName.toLowerCase()) : false);
 
-    // 判定 Reply
-    let isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
+    // Reply detection.
+    const isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
     
-    // 判定 Bot 和提取用户名/姓名
+    // Detect bot-like sender and resolve display name.
     let isBot = false;
     let senderName: string | null = null;
     try {
-      const sender = await client.getEntity(fromId);
-      if (sender instanceof Api.User) {
-        const username = sender.username || "";
-        isBot = sender.bot || username.toLowerCase().includes("bot") || false;
-        senderName = username || sender.firstName || null;
-      } else if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
-        senderName = sender.title || null;
+      if (fromId) {
+        const sender = await client.getEntity(fromId);
+        if (sender instanceof Api.User) {
+          const username = sender.username || "";
+          isBot = sender.bot || username.toLowerCase().includes("bot") || false;
+          senderName = username || sender.firstName || null;
+        } else if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
+          senderName = sender.title || null;
+        }
       }
     } catch (e) {
       console.warn(`[userbot] Failed to get entity for ${fromId}:`, e);
@@ -128,11 +299,38 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       if (path) imageUrls.push(path);
     }
 
+    const rawContext = msg.message || "";
+    const customEmojiOccurrences = extractCustomEmojiOccurrencesFromMessage(
+      rawContext,
+      msg.entities
+    );
+    const emojiIds = new Map<string, string>();
+    for (const occurrence of customEmojiOccurrences) {
+      if (!emojiIds.has(occurrence.customEmojiId)) {
+        emojiIds.set(occurrence.customEmojiId, occurrence.fallbackEmoji);
+      }
+    }
+    await customEmojiResolver.resolve(emojiIds);
+    const customEmojiInfoById = new Map<string, ResolvedCustomEmojiInfo>();
+    for (const [id] of emojiIds) {
+      const info = {
+        packName: customEmojiResolver.getPackName(id),
+        altText: customEmojiResolver.getAltText(id),
+        errorText: customEmojiResolver.getError(id),
+      };
+      customEmojiInfoById.set(id, info);
+    }
+    const renderedContext = renderTextWithCustomEmojiTags(
+      rawContext,
+      customEmojiOccurrences,
+      customEmojiInfoById
+    );
+
     console.log(`[userbot] Ingested: from=${userId} (${senderName}) chat=${chatId} text="${text.slice(0, 20)}..." photo=${photoCount} mention=${isMentionMe}`);
 
     return {
       userId, messageId: msg.id, chatId, conversationType, 
-      context: (msg.message || "") + photoPlaceholder,
+      context: renderedContext + photoPlaceholder,
       timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
       imageUrls,
       metadata: { isBot, username: senderName, replyToMessageId: replyToMsgId, replyToUserId: null, isReplyToMe, isMentionMe, mentions: [] }
@@ -201,19 +399,20 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
     start: async () => {
       await client.connect();
       me = await client.getMe() as Api.User;
-      console.log(`UserBot: 已作为 ${me.firstName} (@${me.username}) 登录 (ID: ${me.id})`);
+      console.log(`UserBot logged in as ${me.firstName} (@${me.username}) (ID: ${me.id})`);
 
       client.addEventHandler(async (ev) => {
         const msg = ev.message;
         if (!(msg instanceof Api.Message)) return;
 
         try {
-          const mediaGroupId = msg.mediaGroupId?.toString();
-          if (mediaGroupId) {
+          const mediaGroupId = (msg as Api.Message & { mediaGroupId?: unknown }).mediaGroupId;
+          const mediaGroupIdText = mediaGroupId != null ? String(mediaGroupId) : null;
+          if (mediaGroupIdText) {
             const chatId = msg.peerId instanceof Api.PeerUser ? msg.peerId.userId.toJSNumber() :
                           (msg.peerId instanceof Api.PeerChat ? msg.peerId.chatId.toJSNumber() :
                           (msg.peerId instanceof Api.PeerChannel ? msg.peerId.channelId.toJSNumber() : 0));
-            const key = `${chatId}:${mediaGroupId}`;
+            const key = `${chatId}:${mediaGroupIdText}`;
             const photoPath = await downloadPhoto(msg);
 
             let pending = pendingMediaGroups.get(key);
@@ -234,7 +433,7 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
               pending.photoCount++;
               pending.photoPaths.push(photoPath);
             }
-            // 如果消息带文本，通常媒体组的第一条消息会带文本
+            // If a media-group message has text, it is usually on the first item.
             if (msg.message) {
               pending.msg = msg;
             }
@@ -332,4 +531,106 @@ export function createUserBotAdapter(options: any): TelegramAdapter {
       return text;
     }
   };
+}
+
+function parseDocumentId(documentId: string): string | null {
+  const normalized = documentId.trim();
+  if (!/^-?\d+$/.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function buildStickerSetCacheKey(stickerSet: Api.TypeInputStickerSet): string | null {
+  if (stickerSet instanceof Api.InputStickerSetShortName) {
+    return `short:${stickerSet.shortName}`;
+  }
+  if (stickerSet instanceof Api.InputStickerSetID) {
+    return `id:${stickerSet.id.toString()}:${stickerSet.accessHash.toString()}`;
+  }
+  const className = (stickerSet as { className?: string }).className;
+  if (!className) {
+    return null;
+  }
+  return `class:${className}`;
+}
+
+function extractCustomEmojiOccurrencesFromMessage(
+  text: string,
+  entities?: Api.TypeMessageEntity[]
+): CustomEmojiOccurrence[] {
+  if (!text || !entities?.length) {
+    return [];
+  }
+  const occurrences: CustomEmojiOccurrence[] = [];
+  for (const entity of entities) {
+    if (!(entity instanceof Api.MessageEntityCustomEmoji)) {
+      continue;
+    }
+    const offset = entity.offset;
+    const length = entity.length;
+    const fallbackEmoji = text.slice(offset, offset + length);
+    if (!fallbackEmoji) {
+      continue;
+    }
+    occurrences.push({
+      customEmojiId: entity.documentId.toString(),
+      fallbackEmoji,
+      offset,
+      length,
+    });
+  }
+  return occurrences;
+}
+
+function renderTextWithCustomEmojiTags(
+  text: string,
+  occurrences: CustomEmojiOccurrence[],
+  infoById: Map<string, ResolvedCustomEmojiInfo>
+): string {
+  if (occurrences.length === 0) {
+    return text;
+  }
+  const sorted = [...occurrences].sort((a, b) => b.offset - a.offset);
+  let rendered = text;
+  for (const occurrence of sorted) {
+    const info = infoById.get(occurrence.customEmojiId);
+    const attrs = [`id="${escapeXmlAttribute(occurrence.customEmojiId)}"`];
+    const errorText = info?.errorText;
+    const altText = info?.altText?.trim() || undefined;
+    const effectiveAlt = altText || (errorText ? `[${errorText}]` : undefined);
+    if (info?.packName) {
+      attrs.push(`pack="${escapeXmlAttribute(info.packName)}"`);
+    }
+    if (effectiveAlt) {
+      attrs.push(`alt="${escapeXmlAttribute(effectiveAlt)}"`);
+    }
+    if (errorText) {
+      attrs.push('error="true"');
+    }
+    const textContent = errorText
+      ? occurrence.fallbackEmoji
+      : (altText || occurrence.fallbackEmoji);
+    const replacement = `<custom-emoji ${attrs.join(" ")}>${escapeXmlText(textContent)}</custom-emoji>`;
+    rendered =
+      rendered.slice(0, occurrence.offset) +
+      replacement +
+      rendered.slice(occurrence.offset + occurrence.length);
+  }
+  return rendered;
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeXmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
