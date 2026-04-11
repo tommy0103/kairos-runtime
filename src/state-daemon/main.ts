@@ -31,10 +31,7 @@ if (config.telegram.mode === "userbot" && !config.telegram.userbot) {
   throw new Error("UserBot configuration is required for userbot mode.");
 }
 
-const telegram = createAdapter({
-  ...(config.telegram as TelegramConfig),
-  customEmojiToText: config.customEmojiToText,
-});
+const telegram = createAdapter(config.telegram as TelegramConfig);
 const enclaveClient = createGrpcEnclaveClient({
   target: AGENT_ENCLAVE_TARGET,
 });

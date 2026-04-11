@@ -6,46 +6,15 @@ import type {
   TelegramMessage,
 } from "./types";
 import { markdownToTelegramHtml } from "./markdownToHtml";
-import { createCustomEmojiToTextResolver } from "./custom-emoji-to-text";
-import { createImageAltTextStore } from "./image-to-text-store";
-import type { CustomEmojiToTextConfig } from "./index";
 
-const DEFAULT_FINAL_TEXT = "(empty)";
+const DEFAULT_FINAL_TEXT = "(空内容)";
 const DEFAULT_STREAM_PLACEHOLDER = "Working on it... estimated 30-90 seconds.";
 const EDIT_RETRY_ATTEMPTS = 3;
 const EDIT_RETRY_DELAY_MS = 500;
 const STREAM_EDIT_THROTTLE_MS = 900;
 const MEDIA_GROUP_FLUSH_DELAY_MS = 250;
 
-type TelegramTextEntity = {
-  type: string;
-  offset: number;
-  length: number;
-  custom_emoji_id?: string;
-};
-
-interface CustomEmojiOccurrence {
-  customEmojiId: string;
-  fallbackEmoji: string;
-  offset: number;
-  length: number;
-}
-
-interface ResolvedCustomEmojiInfo {
-  packName?: string;
-  altText?: string;
-  errorText?: string;
-}
-
-type CustomEmojiRenderer = (
-  text: string,
-  entities?: ReadonlyArray<TelegramTextEntity>
-) => Promise<string>;
-
-export function createTelegramAdapter(
-  token: string,
-  customEmojiToTextConfig?: CustomEmojiToTextConfig
-): TelegramAdapter {
+export function createTelegramAdapter(token: string): TelegramAdapter {
   const bot = new Bot(token);
   const messages: TelegramMessage[] = [];
   const streams = new Map<number, StreamState>();
@@ -66,100 +35,12 @@ export function createTelegramAdapter(
   const editedMessageHandlers = new Set<
     (message: TelegramMessage) => void | Promise<void>
   >();
-  const customEmojiStore = createImageAltTextStore(customEmojiToTextConfig?.dbPath);
-  customEmojiStore.hydrate();
-
-  const customEmojiResolver = createCustomEmojiToTextResolver({
-    enabled: customEmojiToTextConfig?.enabled ?? false,
-    model: customEmojiToTextConfig?.model
-      ? {
-          model: customEmojiToTextConfig.model,
-          baseURL: customEmojiToTextConfig.baseURL,
-          apiKey: customEmojiToTextConfig.apiKey,
-        }
-      : undefined,
-    maxConcurrency: customEmojiToTextConfig?.maxConcurrency,
-    maxFrames: customEmojiToTextConfig?.maxFrames,
-    lookupByHash: customEmojiStore.lookupByHash,
-    persist: customEmojiStore.persist,
-    getCustomEmojiStickers: async (customEmojiIds) => {
-      const stickers = await bot.api.getCustomEmojiStickers(customEmojiIds);
-      return stickers
-        .map((sticker) => {
-          const id =
-            typeof (sticker as { custom_emoji_id?: unknown }).custom_emoji_id === "string"
-              ? (sticker as { custom_emoji_id: string }).custom_emoji_id
-              : undefined;
-          if (!id) {
-            return null;
-          }
-          return {
-            id,
-            file_id: sticker.file_id,
-            is_animated: sticker.is_animated,
-            is_video: sticker.is_video,
-            mime_type: (sticker as { mime_type?: string }).mime_type,
-            set_name: sticker.set_name,
-          };
-        })
-        .filter((item): item is NonNullable<typeof item> => item !== null);
-    },
-    downloadFile: async (fileId) => {
-      const file = await bot.api.getFile(fileId);
-      if (!file.file_path) {
-        throw new Error(`file_path missing for file_id: ${fileId}`);
-      }
-      const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`download custom emoji failed (${response.status})`);
-      }
-      const bytes = await response.arrayBuffer();
-      return Buffer.from(bytes);
-    },
-    resolvePackTitle: async (setName) => {
-      try {
-        const stickerSet = await bot.api.getStickerSet(setName);
-        const title = stickerSet.title?.trim();
-        return title || setName;
-      } catch {
-        return setName;
-      }
-    },
-  });
-
-  const renderCustomEmojiText: CustomEmojiRenderer = async (text, entities) => {
-    if (!text || !entities?.length) {
-      return text;
-    }
-    const occurrences = extractCustomEmojiOccurrences(text, entities);
-    if (occurrences.length === 0) {
-      return text;
-    }
-    const emojiIds = new Map<string, string>();
-    for (const occurrence of occurrences) {
-      if (!emojiIds.has(occurrence.customEmojiId)) {
-        emojiIds.set(occurrence.customEmojiId, occurrence.fallbackEmoji);
-      }
-    }
-    await customEmojiResolver.resolve(emojiIds);
-
-    const infoById = new Map<string, ResolvedCustomEmojiInfo>();
-    for (const [id] of emojiIds) {
-      infoById.set(id, {
-        packName: customEmojiResolver.getPackName(id),
-        altText: customEmojiResolver.getAltText(id),
-        errorText: customEmojiResolver.getError(id),
-      });
-    }
-    return renderTextWithCustomEmojiTags(text, occurrences, infoById);
-  };
 
   const setTyping = async (chatId: number) => {
     try {
       await bot.api.sendChatAction(chatId, "typing");
     } catch (e) {
-      // Ignore chat-action errors.
+      // 忽略设置状态失败
     }
   };
 
@@ -192,8 +73,7 @@ export function createTelegramAdapter(
   };
 
   const editStreamMessageText = async (state: StreamState, text: string) => {
-    const placeholderMessageId = state.placeholderMessageId;
-    if (placeholderMessageId == null) {
+    if (!state.placeholderMessageId) {
       return null;
     }
     const payload = toTelegramPayload(text);
@@ -205,7 +85,7 @@ export function createTelegramAdapter(
       () =>
         bot.api.editMessageText(
           state.chatId,
-          placeholderMessageId,
+          state.placeholderMessageId,
           payload.body,
           opts as any
         ),
@@ -292,7 +172,7 @@ export function createTelegramAdapter(
     messageId,
     placeholder,
   ) => {
-    // Set native typing status.
+    // 设置原生正在输入状态
     void setTyping(chatId);
     const streamId = nextStreamId++;
 
@@ -353,7 +233,7 @@ export function createTelegramAdapter(
       throw new Error(`stream not started for streamId: ${streamId}`);
     }
     state.chunks.push(chunk);
-    // Refresh typing status every 5 chunks.
+    // 每收到 5 个 chunk 刷新一次 typing 状态
     if (state.chunks.length % 5 === 0) {
       void setTyping(state.chatId);
     }
@@ -415,11 +295,7 @@ export function createTelegramAdapter(
     }
     pendingMediaGroups.delete(key);
 
-    const message = await toTelegramMessage(
-      pending.ctx,
-      renderCustomEmojiText,
-      pending.photoCount
-    );
+    const message = toTelegramMessage(pending.ctx, pending.photoCount);
     if (!message) {
       return;
     }
@@ -484,7 +360,7 @@ export function createTelegramAdapter(
       return;
     }
 
-    const message = await toTelegramMessage(ctx, renderCustomEmojiText);
+    const message = toTelegramMessage(ctx);
     if (!message) {
       return;
     }
@@ -496,7 +372,7 @@ export function createTelegramAdapter(
   });
 
   bot.on("edited_message", async (ctx, next) => {
-    const message = await toEditedTelegramMessage(ctx, renderCustomEmojiText);
+    const message = toEditedTelegramMessage(ctx);
     if (!message) {
       return;
     }
@@ -526,22 +402,14 @@ export function createTelegramAdapter(
   };
 }
 
-async function toTelegramMessage(
-  ctx: Context,
-  renderCustomEmojiText: CustomEmojiRenderer,
-  photoCountOverride?: number
-): Promise<TelegramMessage | null> {
+function toTelegramMessage(ctx: Context, photoCountOverride?: number): TelegramMessage | null {
   const chat = ctx.chat;
   const message = ctx.message;
   if (!chat || !message) {
     return null;
   }
 
-  const rawContext = "text" in message ? (message.text ?? "") : (message.caption ?? "");
-  const rawEntities = ("text" in message ? message.entities : message.caption_entities) as
-    | ReadonlyArray<TelegramTextEntity>
-    | undefined;
-  const context = await renderCustomEmojiText(rawContext, rawEntities);
+  const context = "text" in message ? (message.text ?? "") : (message.caption ?? "");
   const stickerEmoji = message.sticker?.emoji ?? "";
   const photoCount = photoCountOverride ?? ((message.photo?.length ?? 0) > 0 ? 1 : 0);
   const photoPlaceholder =
@@ -566,21 +434,14 @@ async function toTelegramMessage(
   };
 }
 
-async function toEditedTelegramMessage(
-  ctx: Context,
-  renderCustomEmojiText: CustomEmojiRenderer
-): Promise<TelegramMessage | null> {
+function toEditedTelegramMessage(ctx: Context): TelegramMessage | null {
   const chat = ctx.chat;
   const message = ctx.editedMessage;
   if (!chat || !message) {
     return null;
   }
 
-  const rawContext = "text" in message ? (message.text ?? "") : (message.caption ?? "");
-  const rawEntities = ("text" in message ? message.entities : message.caption_entities) as
-    | ReadonlyArray<TelegramTextEntity>
-    | undefined;
-  const context = await renderCustomEmojiText(rawContext, rawEntities);
+  const context = "text" in message ? (message.text ?? "") : (message.caption ?? "");
   const stickerEmoji = message.sticker?.emoji ?? "";
   const photoCount = (message.photo?.length ?? 0) > 0 ? 1 : 0;
   const photoPlaceholder = photoCount <= 0 ? "" : "[photo]";
@@ -736,7 +597,7 @@ function extractMentions(message: NonNullable<Context["message"]>): string[] {
 
 function extractMentionsFromTextWithEntities(
   text: string,
-  entities?: ReadonlyArray<TelegramTextEntity>
+  entities?: ReadonlyArray<{ type: string; offset: number; length: number }>
 ): string[] {
   if (!text || !entities?.length) {
     return [];
@@ -752,82 +613,6 @@ function extractMentionsFromTextWithEntities(
     }
   }
   return mentions;
-}
-
-function extractCustomEmojiOccurrences(
-  text: string,
-  entities: ReadonlyArray<TelegramTextEntity>
-): CustomEmojiOccurrence[] {
-  const occurrences: CustomEmojiOccurrence[] = [];
-  for (const entity of entities) {
-    if (entity.type !== "custom_emoji" || !entity.custom_emoji_id) {
-      continue;
-    }
-    const fallbackEmoji = text.slice(entity.offset, entity.offset + entity.length);
-    if (!fallbackEmoji) {
-      continue;
-    }
-    occurrences.push({
-      customEmojiId: entity.custom_emoji_id,
-      fallbackEmoji,
-      offset: entity.offset,
-      length: entity.length,
-    });
-  }
-  return occurrences;
-}
-
-function renderTextWithCustomEmojiTags(
-  text: string,
-  occurrences: CustomEmojiOccurrence[],
-  infoById: Map<string, ResolvedCustomEmojiInfo>
-): string {
-  if (occurrences.length === 0) {
-    return text;
-  }
-
-  const sorted = [...occurrences].sort((a, b) => b.offset - a.offset);
-  let rendered = text;
-  for (const occurrence of sorted) {
-    const info = infoById.get(occurrence.customEmojiId);
-    const attrs = [`id="${escapeXmlAttribute(occurrence.customEmojiId)}"`];
-    const errorText = info?.errorText;
-    const altText = info?.altText?.trim() || undefined;
-    const effectiveAlt = altText || (errorText ? `[${errorText}]` : undefined);
-    if (info?.packName) {
-      attrs.push(`pack="${escapeXmlAttribute(info.packName)}"`);
-    }
-    if (effectiveAlt) {
-      attrs.push(`alt="${escapeXmlAttribute(effectiveAlt)}"`);
-    }
-    if (errorText) {
-      attrs.push('error="true"');
-    }
-    const textContent = errorText
-      ? occurrence.fallbackEmoji
-      : (altText || occurrence.fallbackEmoji);
-    const replacement = `<custom-emoji ${attrs.join(" ")}>${escapeXmlText(textContent)}</custom-emoji>`;
-    rendered =
-      rendered.slice(0, occurrence.offset) +
-      replacement +
-      rendered.slice(occurrence.offset + occurrence.length);
-  }
-  return rendered;
-}
-
-function escapeXmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("\"", "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function escapeXmlText(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 }
 
 async function retry<T>(

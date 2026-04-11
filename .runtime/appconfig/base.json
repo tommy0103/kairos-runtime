@@ -56,15 +56,6 @@
         "ollamaBaseUrl": "${ENV:OLLAMA_BASE_URL}",
         "ollamaModel": "qwen3-embedding:0.6b"
       }
-    },
-    "customEmojiToText": {
-      "enabled": "${ENV:CUSTOM_EMOJI_TO_TEXT_ENABLED:-false}",
-      "model": "${ENV:CUSTOM_EMOJI_TO_TEXT_MODEL:-}",
-      "baseURL": "${ENV:CUSTOM_EMOJI_TO_TEXT_BASE_URL:-}",
-      "apiKey": "${ENV:CUSTOM_EMOJI_TO_TEXT_API_KEY:-}",
-      "maxConcurrency": "${ENV:CUSTOM_EMOJI_TO_TEXT_MAX_CONCURRENCY:-3}",
-      "maxFrames": "${ENV:CUSTOM_EMOJI_TO_TEXT_MAX_FRAMES:-5}",
-      "dbPath": "${ENV:CUSTOM_EMOJI_TO_TEXT_DB_PATH:-data/memoh.db}"
     }
   }
 }

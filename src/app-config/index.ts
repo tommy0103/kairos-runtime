@@ -70,15 +70,6 @@ interface StateDaemonConfig {
       ollamaModel: string;
     };
   };
-  customEmojiToText: {
-    enabled: boolean;
-    model?: string;
-    baseURL?: string;
-    apiKey?: string;
-    maxConcurrency: number;
-    maxFrames: number;
-    dbPath: string;
-  };
 }
 
 interface AppConfigFileShape {
@@ -197,31 +188,6 @@ function resolveBoolean(value: unknown, path: string, fallback: boolean): boolea
     const resolved = resolveEnvReference(value, path).toLowerCase();
     if (resolved === "true" || resolved === "1") return true;
     if (resolved === "false" || resolved === "0") return false;
-  }
-  return fallback;
-}
-
-function resolveInteger(
-  value: unknown,
-  path: string,
-  fallback: number,
-  min = 1
-): number {
-  if (value === undefined || value === null) {
-    return fallback;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(min, Math.floor(value));
-  }
-  if (typeof value === "string") {
-    const resolved = resolveEnvReference(value, path).trim();
-    if (!resolved) {
-      return fallback;
-    }
-    const parsed = Number.parseInt(resolved, 10);
-    if (Number.isFinite(parsed)) {
-      return Math.max(min, Math.floor(parsed));
-    }
   }
   return fallback;
 }
@@ -412,47 +378,6 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
     process.env.OLLAMA_EMBED_MODEL ??
     requireString(embeddingConfig.ollamaModel, "stateDaemon.model.embedding.ollamaModel");
 
-  const customEmojiConfig = isObject((stateConfig as { customEmojiToText?: unknown }).customEmojiToText)
-    ? ((stateConfig as { customEmojiToText: Record<string, JsonValue> }).customEmojiToText)
-    : {};
-  const customEmojiEnabled = resolveBoolean(
-    process.env.CUSTOM_EMOJI_TO_TEXT_ENABLED ?? customEmojiConfig.enabled,
-    "stateDaemon.customEmojiToText.enabled",
-    false
-  );
-  const customEmojiModelRaw =
-    process.env.CUSTOM_EMOJI_TO_TEXT_MODEL ??
-    (typeof customEmojiConfig.model === "string"
-      ? resolveEnvReference(customEmojiConfig.model, "stateDaemon.customEmojiToText.model")
-      : undefined);
-  const customEmojiBaseURLRaw =
-    process.env.CUSTOM_EMOJI_TO_TEXT_BASE_URL ??
-    (typeof customEmojiConfig.baseURL === "string"
-      ? resolveEnvReference(customEmojiConfig.baseURL, "stateDaemon.customEmojiToText.baseURL")
-      : undefined);
-  const customEmojiApiKeyRaw =
-    process.env.CUSTOM_EMOJI_TO_TEXT_API_KEY ??
-    (typeof customEmojiConfig.apiKey === "string"
-      ? resolveEnvReference(customEmojiConfig.apiKey, "stateDaemon.customEmojiToText.apiKey")
-      : undefined);
-  const customEmojiMaxConcurrency = resolveInteger(
-    process.env.CUSTOM_EMOJI_TO_TEXT_MAX_CONCURRENCY ?? customEmojiConfig.maxConcurrency,
-    "stateDaemon.customEmojiToText.maxConcurrency",
-    3,
-    1
-  );
-  const customEmojiMaxFrames = resolveInteger(
-    process.env.CUSTOM_EMOJI_TO_TEXT_MAX_FRAMES ?? customEmojiConfig.maxFrames,
-    "stateDaemon.customEmojiToText.maxFrames",
-    5,
-    1
-  );
-  const customEmojiDbPathRaw =
-    process.env.CUSTOM_EMOJI_TO_TEXT_DB_PATH ??
-    (typeof customEmojiConfig.dbPath === "string"
-      ? resolveEnvReference(customEmojiConfig.dbPath, "stateDaemon.customEmojiToText.dbPath")
-      : "data/memoh.db");
-
   if (process.env.MEMORY_FILES_ROOT) {
     runtime.memoryFilesRoot = normalizePath(process.env.MEMORY_FILES_ROOT, REPO_ROOT);
   }
@@ -485,15 +410,6 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
         ollamaBaseUrl: embeddingOllamaBaseUrl,
         ollamaModel: embeddingOllamaModel,
       },
-    },
-    customEmojiToText: {
-      enabled: customEmojiEnabled,
-      model: customEmojiModelRaw || llmCloudModel,
-      baseURL: customEmojiBaseURLRaw || llmCloudBaseURL,
-      apiKey: customEmojiApiKeyRaw || llmCloudApiKey,
-      maxConcurrency: customEmojiMaxConcurrency,
-      maxFrames: customEmojiMaxFrames,
-      dbPath: normalizePath(customEmojiDbPathRaw, REPO_ROOT),
     },
   };
 }
