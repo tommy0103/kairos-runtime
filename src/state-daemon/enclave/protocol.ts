@@ -13,6 +13,13 @@ export type EnclaveStreamEvent =
       delta: string;
     }
   | {
+      type: "send_message";
+      delta: string;
+      toolCallId?: string;
+      awaitResponse?: boolean;
+      replyTo?: string;
+    }
+  | {
       type: "tool_execution_start";
       toolName: string;
       toolCallId?: string;

@@ -18,13 +18,20 @@ export type RuntimeReplyStage =
   | "retrieving_context"
   | "generating"
   | "tool_call"
-  | "streaming";
+  | "streaming"
+  | "sending";
 
 export type RuntimeReplyStreamEvent =
   | {
       type: "status_update";
       stage: RuntimeReplyStage;
       text: string;
+    }
+  | {
+      type: "send_message";
+      text: string;
+      replyToMessageId?: number;
+      awaitResponse?: boolean;
     }
   | {
       type: "message_delta";
@@ -79,6 +86,9 @@ const SESSION_DEBUG_LOG_PATH = join(
 );
 const LONG_RUNNING_STATUS_INTERVAL_MS = 15000;
 const DEFAULT_PROBE_MODEL_PROVIDER = "ollama";
+const DEFAULT_SEND_MESSAGE_MODE = "strict";
+
+type SendMessageMode = "strict" | "compat";
 
 const PROBE_DECISION_PROMPT = [
   "You are running in PROBE mode for a Telegram group-chat assistant.",
@@ -92,6 +102,8 @@ const PROBE_DECISION_PROMPT = [
 
 function statusTextForToolStart(toolName: string): string {
   switch (toolName) {
+    case "send_message":
+      return "Sending message...";
     case "fetch_webpage":
       return "Checking web sources...";
     case "read_file_safe":
@@ -113,6 +125,8 @@ function statusTextForToolStart(toolName: string): string {
 
 function statusTextForToolEnd(toolName: string): string {
   switch (toolName) {
+    case "send_message":
+      return "Message sent.";
     case "fetch_webpage":
       return "Web lookup complete, continuing generation...";
     case "read_file_safe":
@@ -125,6 +139,25 @@ function statusTextForToolEnd(toolName: string): string {
     default:
       return "Tool step finished, continuing generation...";
   }
+}
+
+function resolveSendMessageMode(): SendMessageMode {
+  const raw = process.env.ENCLAVE_SEND_MESSAGE_MODE?.trim().toLowerCase();
+  if (raw === "compat") {
+    return "compat";
+  }
+  return DEFAULT_SEND_MESSAGE_MODE;
+}
+
+function parseReplyToMessageId(input: string | undefined): number | undefined {
+  if (!input) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(input, 10);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return parsed;
 }
 
 function toLocalPrompt(messages: LLMMessage[]): string {
@@ -289,6 +322,7 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
   const streamReply: ClientRuntime["streamReply"] = ({ triggerMessage, prompt }) => {
     const stream = new RemoteAsyncIterable<RuntimeReplyStreamEvent>();
     void (async () => {
+      const sendMessageMode = resolveSendMessageMode();
       let longRunningTicker: ReturnType<typeof setInterval> | null = null;
       const startedAt = Date.now();
       try {
@@ -345,6 +379,9 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
             continue;
           }
           if (event.type === "message_update" && event.role === "assistant" && event.delta) {
+            if (sendMessageMode === "strict") {
+              continue;
+            }
             if (!startedStreamingText) {
               stream.push({
                 type: "status_update",
@@ -356,6 +393,20 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
             stream.push({
               type: "message_delta",
               delta: event.delta,
+            });
+            continue;
+          }
+          if (event.type === "send_message" && event.delta) {
+            stream.push({
+              type: "status_update",
+              stage: "sending",
+              text: "Sending message...",
+            });
+            stream.push({
+              type: "send_message",
+              text: event.delta,
+              replyToMessageId: parseReplyToMessageId(event.replyTo),
+              awaitResponse: event.awaitResponse,
             });
             continue;
           }

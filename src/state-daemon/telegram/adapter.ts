@@ -287,6 +287,10 @@ export function createTelegramAdapter(
     }
   };
 
+  const sendTyping: TelegramAdapter["sendTyping"] = async (chatId) => {
+    await setTyping(chatId);
+  };
+
   const startStream: TelegramAdapter["startStream"] = async (
     chatId,
     messageId,
@@ -519,6 +523,7 @@ export function createTelegramAdapter(
     onMessage,
     onEditedMessage,
     reply,
+    sendTyping,
     startStream,
     setStreamStatus,
     appendStream,

@@ -39,6 +39,8 @@ interface GrpcStreamReplyEvent {
   tool_name?: string;
   tool_call_id?: string;
   result_json?: string;
+  await_response?: boolean;
+  reply_to?: string;
   error?: string;
 }
 
@@ -108,6 +110,15 @@ function mapGrpcEvent(event: GrpcStreamReplyEvent): EnclaveStreamEvent {
       type: "message_update",
       role: "assistant",
       delta: event.delta ?? "",
+    };
+  }
+  if (type === "send_message") {
+    return {
+      type: "send_message",
+      delta: event.delta ?? "",
+      toolCallId: event.tool_call_id,
+      awaitResponse: event.await_response ?? false,
+      replyTo: event.reply_to,
     };
   }
   if (type === "tool_execution_start") {

@@ -108,7 +108,30 @@ export interface MessageGateway {
   stop: () => void;
 }
 
-const LONG_WAIT_STATUS_DELAY_MS = 120000;
+const DEFAULT_LONG_WAIT_HINT_DELAY_MS = 120000;
+const TYPING_REFRESH_MS = 4000;
+const DEFAULT_SEND_MESSAGE_MODE = "strict";
+type SendMessageMode = "strict" | "compat";
+
+function resolveSendMessageMode(): SendMessageMode {
+  const raw = process.env.ENCLAVE_SEND_MESSAGE_MODE?.trim().toLowerCase();
+  if (raw === "compat") {
+    return "compat";
+  }
+  return DEFAULT_SEND_MESSAGE_MODE;
+}
+
+function resolveLongWaitHintDelayMs(): number {
+  const raw = process.env.ENCLAVE_LONG_WAIT_HINT_MS?.trim();
+  if (!raw) {
+    return DEFAULT_LONG_WAIT_HINT_DELAY_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_LONG_WAIT_HINT_DELAY_MS;
+  }
+  return parsed;
+}
 
 function estimateReplyEtaSeconds(message: TelegramMessage): { min: number; max: number } {
   let min = 30;
@@ -154,6 +177,8 @@ export function createMessageGateway(
   );
   const probeEnabled = options.probe?.enabled ?? false;
   const probeCooldownMs = Math.max(0, options.probe?.cooldownMs ?? 45000);
+  const sendMessageMode = resolveSendMessageMode();
+  const longWaitHintDelayMs = resolveLongWaitHintDelayMs();
   const lastProbeAtByChat = new Map<number, number>();
 
   const recordNormalizedMessage = async (message: TelegramMessage) => {
@@ -242,75 +267,141 @@ export function createMessageGateway(
 
     const instruction = etiquetteManager.getInstruction(socialState);
 
-    const eta = estimateReplyEtaSeconds(message);
-    const streamMessageId = await options.telegram.startStream(
-      message.chatId,
-      message.messageId,
-      `Working on it... ${toEtaHintText(eta)}`
-    );
-    let lastStatus = "";
-    const applyStatus = (event: RuntimeReplyStreamEvent | string) => {
-      const text = typeof event === "string"
-        ? event
-        : event.type === "status_update"
-          ? event.text
-          : "";
-      const normalized = text.trim();
-      if (!normalized || normalized === lastStatus) {
-        return;
-      }
-      lastStatus = normalized;
-      void options.telegram.setStreamStatus(streamMessageId, normalized).catch((error) => {
-        console.error("message gateway setStreamStatus failed:", error);
-      });
-    };
-    const longWaitTimer = setTimeout(() => {
-      applyStatus(
-        "This is taking longer than usual. Feel free to do something else; I will post the final reply when done."
+    if (sendMessageMode === "compat") {
+      const eta = estimateReplyEtaSeconds(message);
+      const streamMessageId = await options.telegram.startStream(
+        message.chatId,
+        message.messageId,
+        `Working on it... ${toEtaHintText(eta)}`
       );
-    }, LONG_WAIT_STATUS_DELAY_MS);
+      let lastStatus = "";
+      const applyStatus = (event: RuntimeReplyStreamEvent | string) => {
+        const text = typeof event === "string"
+          ? event
+          : event.type === "status_update"
+            ? event.text
+            : "";
+        const normalized = text.trim();
+        if (!normalized || normalized === lastStatus) {
+          return;
+        }
+        lastStatus = normalized;
+        void options.telegram.setStreamStatus(streamMessageId, normalized).catch((error) => {
+          console.error("message gateway setStreamStatus failed:", error);
+        });
+      };
+      const longWaitTimer = setTimeout(() => {
+        applyStatus(
+          "This is taking longer than usual. Feel free to do something else; I will post the final reply when done."
+        );
+      }, longWaitHintDelayMs);
 
+      try {
+        let hasOutput = false;
+        for await (const event of options.runtime.streamReply({
+          triggerMessage: message,
+          prompt: instruction,
+        })) {
+          if (event.type === "status_update") {
+            applyStatus(event);
+            continue;
+          }
+          if (event.type === "message_delta") {
+            options.telegram.appendStream(streamMessageId, event.delta);
+            hasOutput = true;
+          }
+        }
+        if (!hasOutput) {
+          options.telegram.appendStream(
+            streamMessageId,
+            "\n(Model returned no displayable text in this turn. Please retry.)"
+          );
+        }
+        await options.telegram.endStream(streamMessageId);
+      } catch (error) {
+        try {
+          options.telegram.appendStream(
+            streamMessageId,
+            "\n(Generation failed, please retry in a moment.)"
+          );
+        } catch {
+        }
+        try {
+          await options.telegram.endStream(streamMessageId);
+        } catch (endError) {
+          console.error("message gateway endStream failed:", endError);
+          await options.telegram.reply(
+            message.chatId,
+            "Generation failed, please retry in a moment.",
+            message.messageId
+          );
+        }
+        console.error("message gateway stream failed:", error);
+      } finally {
+        clearTimeout(longWaitTimer);
+      }
+      return;
+    }
+
+    let typingTimer: ReturnType<typeof setInterval> | null = null;
+    let longWaitTimer: ReturnType<typeof setTimeout> | null = null;
+    let sentMessagesCount = 0;
+    let longWaitHintSent = false;
     try {
-      let hasOutput = false;
+      await options.telegram.sendTyping(message.chatId);
+      typingTimer = setInterval(() => {
+        void options.telegram.sendTyping(message.chatId).catch((error) => {
+          console.error("message gateway sendTyping failed:", error);
+        });
+      }, TYPING_REFRESH_MS);
+
+      if (longWaitHintDelayMs > 0) {
+        longWaitTimer = setTimeout(() => {
+          if (sentMessagesCount > 0 || longWaitHintSent) {
+            return;
+          }
+          longWaitHintSent = true;
+          void options.telegram.reply(
+            message.chatId,
+            "Still working on it, I will send messages as they are ready.",
+            message.messageId
+          ).catch((error) => {
+            console.error("message gateway long-wait hint failed:", error);
+          });
+        }, longWaitHintDelayMs);
+      }
+
       for await (const event of options.runtime.streamReply({
         triggerMessage: message,
         prompt: instruction,
       })) {
         if (event.type === "status_update") {
-          applyStatus(event);
           continue;
         }
-        options.telegram.appendStream(streamMessageId, event.delta);
-        hasOutput = true;
+        if (event.type === "send_message") {
+          const replyToMessageId = event.replyToMessageId ?? message.messageId;
+          await options.telegram.reply(
+            message.chatId,
+            event.text,
+            replyToMessageId
+          );
+          sentMessagesCount += 1;
+        }
       }
-      if (!hasOutput) {
-        options.telegram.appendStream(
-          streamMessageId,
-          "\n(Model returned no displayable text in this turn. Please retry.)"
-        );
-      }
-      await options.telegram.endStream(streamMessageId);
     } catch (error) {
-      try {
-        options.telegram.appendStream(
-          streamMessageId,
-          "\n(Generation failed, please retry in a moment.)"
-        );
-      } catch {
-      }
-      try {
-        await options.telegram.endStream(streamMessageId);
-      } catch (endError) {
-        console.error("message gateway endStream failed:", endError);
-        await options.telegram.reply(
-          message.chatId,
-          "Generation failed, please retry in a moment.",
-          message.messageId
-        );
-      }
+      await options.telegram.reply(
+        message.chatId,
+        "Generation failed, please retry in a moment.",
+        message.messageId
+      );
       console.error("message gateway stream failed:", error);
     } finally {
-      clearTimeout(longWaitTimer);
+      if (typingTimer) {
+        clearInterval(typingTimer);
+      }
+      if (longWaitTimer) {
+        clearTimeout(longWaitTimer);
+      }
     }
   };
 

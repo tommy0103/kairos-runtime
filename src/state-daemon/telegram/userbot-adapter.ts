@@ -458,6 +458,9 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       const sent = await client.sendMessage(target, { message: text, replyTo: messageId });
       if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
     },
+    sendTyping: async (chatId) => {
+      await setTyping(chatId);
+    },
     startStream: async (chatId, messageId, placeholder) => {
       void setTyping(chatId);
       const streamId = nextStreamId++;

@@ -26,4 +26,6 @@ message StreamReplyEvent {
   string result_json = 6;
   string ts_code = 7;
   string error = 8;
+  bool await_response = 9;
+  string reply_to = 10;
 }

@@ -54,8 +54,18 @@ function renderToolsMemory(tools: AgentTool<any>[]): string {
     return "# Tools\n\nNo tools are currently registered.\n";
   }
 
+  const orderedTools = [...tools].sort((a, b) => {
+    if (a.name === "send_message" && b.name !== "send_message") {
+      return -1;
+    }
+    if (b.name === "send_message" && a.name !== "send_message") {
+      return 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+
   const lines: string[] = ["# Tools", ""];
-  for (const tool of tools) {
+  for (const tool of orderedTools) {
     lines.push(`## ${tool.name}`);
     lines.push("```ts");
     lines.push(renderToolSignature(tool));

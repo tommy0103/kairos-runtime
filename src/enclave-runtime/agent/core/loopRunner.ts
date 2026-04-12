@@ -38,6 +38,13 @@ export type AgentLoopStreamEvent =
       delta: string;
     }
   | {
+      type: "send_message";
+      delta: string;
+      toolCallId?: string;
+      awaitResponse?: boolean;
+      replyTo?: string;
+    }
+  | {
       type: "tool_execution_start";
       toolName: string;
       toolCallId?: string;
@@ -66,6 +73,8 @@ export interface CreateAgentLoopRunnerOptions {
 }
 
 const DEFAULT_PROVIDER = "openai";
+const DEFAULT_SEND_MESSAGE_MODE = "strict";
+type SendMessageMode = "strict" | "compat";
 
 function createCompatibleModel(modelId: string, baseURL: string): Model<"openai-completions"> {
   return {
@@ -138,6 +147,14 @@ interface ApoptosisToolResult {
   };
 }
 
+interface SendMessageToolResult {
+  details?: {
+    text?: string;
+    awaitResponse?: boolean;
+    replyTo?: string;
+  };
+}
+
 interface AgentEndMessage {
   role?: string;
   content?: Array<{ type?: string; text?: string }>;
@@ -152,6 +169,34 @@ function extractApoptosisTargetToolName(result: unknown): string | null {
   }
   const normalized = targetToolName.trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function resolveSendMessageMode(): SendMessageMode {
+  const raw = process.env.ENCLAVE_SEND_MESSAGE_MODE?.trim().toLowerCase();
+  if (raw === "compat") {
+    return "compat";
+  }
+  return DEFAULT_SEND_MESSAGE_MODE;
+}
+
+function extractSendMessagePayload(result: unknown): {
+  text: string;
+  awaitResponse: boolean;
+  replyTo?: string;
+} | null {
+  const details = (result as SendMessageToolResult | undefined)?.details;
+  const text = typeof details?.text === "string" ? details.text.trim() : "";
+  if (!text) {
+    return null;
+  }
+  const replyTo = typeof details?.replyTo === "string" && details.replyTo.trim()
+    ? details.replyTo.trim()
+    : undefined;
+  return {
+    text,
+    awaitResponse: details?.awaitResponse === true,
+    replyTo,
+  };
 }
 
 import fs from "node:fs/promises";
@@ -281,6 +326,8 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     let currentMessageHasToolCall = false;
     let currentMessageTextBuffer = "";
     let globalMessageHasEmitted = false;
+    let messageSentViaTool = false;
+    const sendMessageMode = resolveSendMessageMode();
     try {
       console.log("[loopRunner] calling agentLoop with messages:", messages.length);
       const stream = agentLoop(
@@ -344,7 +391,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
             currentMessageTextBuffer = "";
             continue;
           }
-          if (!currentMessageHasToolCall) {
+          if (!currentMessageHasToolCall && sendMessageMode === "compat" && !messageSentViaTool) {
             let output = currentMessageTextBuffer;
             if (!output && Array.isArray(message.content)) {
               output = message.content
@@ -385,6 +432,19 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
               await options.unregisterTool(targetToolName);
               toolsChanged = true;
             }
+          } else if (event.toolName === "send_message") {
+            const payload = extractSendMessagePayload(event.result);
+            if (payload) {
+              messageSentViaTool = true;
+              globalMessageHasEmitted = true;
+              yield {
+                type: "send_message",
+                delta: payload.text,
+                toolCallId: event.toolCallId,
+                awaitResponse: payload.awaitResponse,
+                replyTo: payload.replyTo,
+              };
+            }
           }
           if (toolsChanged) {
             syncToolsInPlace(loopContext, options.getCurrentTools());
@@ -410,7 +470,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
         }
       }
 
-      if (!globalMessageHasEmitted) {
+      if (!globalMessageHasEmitted && sendMessageMode === "compat" && !messageSentViaTool) {
         const newMessages = await stream.result();
         const fallbackText = extractAssistantTextFromMessages(newMessages);
         console.log(
@@ -460,4 +520,3 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     applyToolsToActiveLoops,
   };
 }
-

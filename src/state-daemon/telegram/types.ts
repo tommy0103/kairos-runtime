@@ -28,6 +28,7 @@ export interface TelegramAdapter {
     handler: (message: TelegramMessage) => void | Promise<void>
   ) => () => void;
   reply: (chatId: number, text: string, messageId?: number) => Promise<void>;
+  sendTyping: (chatId: number) => Promise<void>;
   startStream: (
     chatId: number,
     messageId?: number,

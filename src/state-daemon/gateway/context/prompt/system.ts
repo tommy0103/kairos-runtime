@@ -5,6 +5,15 @@ import { quote } from "./utils";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 const SHARED_MEMORY_DIR = resolve(CURRENT_DIR, "../../../../.runtime/memory_files");
+const DEFAULT_SEND_MESSAGE_MODE = "strict";
+
+function resolveSendMessageMode(): "strict" | "compat" {
+  const raw = process.env.ENCLAVE_SEND_MESSAGE_MODE?.trim().toLowerCase();
+  if (raw === "compat") {
+    return "compat";
+  }
+  return DEFAULT_SEND_MESSAGE_MODE;
+}
 
 function resolveMemoryDir(): string {
   return process.env.MEMORY_FILES_ROOT?.trim() || SHARED_MEMORY_DIR;
@@ -24,6 +33,23 @@ export const system = () => {
   const soulContent = readMemoryFile("Soul.md");
   const identityContent = readMemoryFile("Identity.md");
   const toolsContent = readMemoryFile("Tools.md");
+  const sendMessageMode = resolveSendMessageMode();
+  const outputContract =
+    sendMessageMode === "strict"
+      ? `
+    # Output Contract
+    - Your direct assistant text is private internal monologue and is NOT shown to users.
+    - To send user-visible messages, you MUST call ${quote("send_message")}.
+    - You may call ${quote("send_message")} multiple times in one run. Each call sends one message.
+    - Use ${quote("await_response=true")} when you plan to continue with more actions after sending.
+    - If no reply is needed, do not call ${quote("send_message")} and stay silent.
+    `
+      : `
+    # Output Contract
+    - Prefer ${quote("send_message")} for user-visible replies.
+    - You may call ${quote("send_message")} multiple times in one run.
+    - If needed, plain assistant text may still be shown as compatibility fallback.
+    `;
 
   return `
     You are an autonomous AI Agent. You have just been initialized.
@@ -50,6 +76,8 @@ export const system = () => {
 
     # Tools.md
     ${toolsContent}
+
+    ${outputContract}
 
     Caution: It's ${new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" })} now.
     `;
