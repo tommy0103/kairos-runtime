@@ -263,10 +263,10 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     const myUsername = (me.username || "").toLowerCase();
     const text = (msg.message || "").toLowerCase();
     
-    // Mention heuristic: always trigger in private chats, or when username/name matches.
-    const isMentionMe = conversationType === "private" ||
-                        (myUsername ? text.includes(myUsername) : false) ||
-                        (me.firstName ? text.includes(me.firstName.toLowerCase()) : false);
+    // Mention heuristic: always trigger in private chats, or when explicitly @mentioned.
+    const isMentionMe =
+      conversationType === "private" ||
+      (myUsername ? text.includes(`@${myUsername}`) : false);
 
     // Reply detection.
     const isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
