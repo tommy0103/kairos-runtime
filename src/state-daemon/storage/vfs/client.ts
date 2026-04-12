@@ -7,6 +7,7 @@
 import { Metadata } from 'nice-grpc-common';
 import * as grpc from "@grpc/grpc-js";
 import { createChannel, createClient } from "nice-grpc";
+import { randomUUID } from "node:crypto";
 import {
   LogosDefinition,
   type LogosClient as LogosGrpcClient,
@@ -55,6 +56,11 @@ export class MemoryVfsClient {
   // private readonly grpcClient: MemoryVFSGrpcClient;
   private readonly logosClient: LogosGrpcClient;
   private readonly timeoutMs?: number;
+  private readonly sessionToken: string;
+  private readonly sessionTaskId: string;
+  private readonly sessionRole: string;
+  private sessionKeyPromise: Promise<string> | null = null;
+  private sessionKey: string | null = null;
 
   constructor(options: CreateMemoryVfsClientOptions = {}) {
     const rawTarget = options.target ?? getDefaultMemoryVfsTarget();
@@ -67,12 +73,66 @@ export class MemoryVfsClient {
     // this.grpcClient = createClient(MemoryVFSDefinition, channel);
     this.logosClient = createClient(LogosDefinition, channel);
     this.timeoutMs = options.timeoutMs;
+    const sessionTokenSeed =
+      process.env.LOGOS_TOKEN?.trim() ||
+      process.env.STATE_DAEMON_LOGOS_TOKEN?.trim() ||
+      "state-daemon";
+    this.sessionToken = `${sessionTokenSeed}-${randomUUID()}`;
+    this.sessionTaskId =
+      process.env.LOGOS_TASK_ID?.trim() ||
+      process.env.STATE_DAEMON_LOGOS_TASK_ID?.trim() ||
+      "state-daemon";
+    this.sessionRole =
+      process.env.LOGOS_ROLE?.trim() ||
+      process.env.STATE_DAEMON_LOGOS_ROLE?.trim() ||
+      "admin";
   }
 
-  private buildOptions() {
+  private async ensureSessionKey(): Promise<string> {
+    if (this.sessionKey) {
+      return this.sessionKey;
+    }
+    if (this.sessionKeyPromise) {
+      return this.sessionKeyPromise;
+    }
+    this.sessionKeyPromise = (async () => {
+      await this.logosClient.registerToken({
+        token: this.sessionToken,
+        taskId: this.sessionTaskId,
+        role: this.sessionRole,
+      }, this.buildCallOptions());
+
+      let headerSessionKey = "";
+      const handshake = await this.logosClient.handshake(
+        { token: this.sessionToken },
+        {
+          ...this.buildCallOptions(),
+          onHeader: (header) => {
+            headerSessionKey = header.get("x-logos-session")?.toString() ?? "";
+          },
+        }
+      );
+      if (!handshake.ok) {
+        throw new Error(`logos handshake failed: ${handshake.error || "unknown error"}`);
+      }
+      if (!headerSessionKey) {
+        throw new Error("logos handshake succeeded but x-logos-session header is missing");
+      }
+      this.sessionKey = headerSessionKey;
+      return headerSessionKey;
+    })().finally(() => {
+      this.sessionKeyPromise = null;
+    });
+    return this.sessionKeyPromise;
+  }
+
+  private async buildOptions() {
+    const sessionKey = await this.ensureSessionKey();
     return {
       ...this.buildCallOptions(),
-      metadata: Metadata({ 'authorization': 'Bearer KAIROS_SYSTEM_TOKEN' })
+      metadata: Metadata({
+        "x-logos-session": sessionKey,
+      }),
     };
   }
 
@@ -88,7 +148,7 @@ export class MemoryVfsClient {
     });
     const resp = await this.logosClient.call(
       { tool: "memory.search", paramsJson: params },
-      this.buildOptions()
+      await this.buildOptions()
     );
     // Convert logos response to old SearchResponse format
     const messages = JSON.parse(resp.resultJson || "[]");
@@ -110,7 +170,7 @@ export class MemoryVfsClient {
     const uri = translatePath(request.path);
     await this.logosClient.write(
       { uri, content: request.content },
-      this.buildOptions()
+      await this.buildOptions()
     );
     return {};
   }
@@ -122,7 +182,7 @@ export class MemoryVfsClient {
     const uri = translatePath(request.path);
     const resp = await this.logosClient.read(
       { uri },
-      this.buildOptions()
+      await this.buildOptions()
     );
     return { content: resp.content };
   }
@@ -134,7 +194,7 @@ export class MemoryVfsClient {
     const uri = translatePath(request.path);
     await this.logosClient.patch(
       { uri, partial: request.partialContent },
-      this.buildOptions()
+      await this.buildOptions()
     );
     return {};
   }
@@ -161,7 +221,7 @@ export class MemoryVfsClient {
           uri: `logos://memory/groups/${request.chatId}/messages`,
           content: msgJson,
         },
-        this.buildOptions()
+        await this.buildOptions()
       );
     }
 
@@ -181,7 +241,7 @@ export class MemoryVfsClient {
           uri: `logos://memory/groups/${request.chatId}/summary/short/${period}`,
           content: summaryJson,
         },
-        this.buildOptions()
+        await this.buildOptions()
       );
     }
 
