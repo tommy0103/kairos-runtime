@@ -216,6 +216,11 @@ export function createMessageGateway(
       return;
     }
     if (decision.reason === "probe_gate") {
+      const role = options.userRoles?.getRole(message.userId);
+      // Owner can always explicitly @mention to trigger; avoid probe auto-replies.
+      if (role === "owner") {
+        return;
+      }
       if (!probeEnabled) {
         return;
       }

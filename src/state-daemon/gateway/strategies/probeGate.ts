@@ -19,6 +19,15 @@ export function createProbeGateTriggerPolicy(): GatewayTriggerPolicy {
       if (!prompt || prompt.startsWith("/")) {
         return { shouldTrigger: false, reason: "none" };
       }
+      // Skip probe for likely mentions to other bots/services in group chat.
+      if (prompt.includes("@")) {
+        return { shouldTrigger: false, reason: "none" };
+      }
+      // Skip low-signal noise like "...", "??", "ok", etc.
+      const signalText = prompt.replace(/[\s\p{P}\p{S}]/gu, "");
+      if (signalText.length < 3) {
+        return { shouldTrigger: false, reason: "none" };
+      }
 
       return { shouldTrigger: true, reason: "probe_gate", prompt };
     },
