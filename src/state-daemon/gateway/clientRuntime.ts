@@ -94,6 +94,7 @@ const PROBE_DECISION_PROMPT = [
   "You are running in PROBE mode for a Telegram group-chat assistant.",
   "No one directly @mentioned the bot and no one replied to the bot in this turn.",
   "Decide whether the bot should speak now.",
+  "Default to silent unless a reply is clearly necessary and high-value.",
   "Use action='silent' for normal chatter where bot participation is unnecessary.",
   "Use action='respond' only when a bot reply would clearly add value right now.",
   "Return JSON only with this schema:",
@@ -168,7 +169,6 @@ function toLocalPrompt(messages: LLMMessage[]): string {
 
 function parseProbeDecision(text: string): ProbeDecision {
   const trimmed = text.trim();
-  const lower = trimmed.toLowerCase();
   const jsonStart = trimmed.indexOf("{");
   const jsonEnd = trimmed.lastIndexOf("}") + 1;
 
@@ -215,13 +215,7 @@ function parseProbeDecision(text: string): ProbeDecision {
     }
   }
 
-  if (/\b(silent|silence|ignore|skip|no)\b/.test(lower)) {
-    return { shouldReply: false, reason: "keyword_silent", raw: text };
-  }
-  if (/\b(respond|reply|speak|activate|yes)\b/.test(lower)) {
-    return { shouldReply: true, reason: "keyword_respond", raw: text };
-  }
-  return { shouldReply: false, reason: "unrecognized", raw: text };
+  return { shouldReply: false, reason: "invalid_format", raw: text };
 }
 
 export function createClientRuntime(options: CreateClientRuntimeOptions): ClientRuntime {

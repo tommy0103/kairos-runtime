@@ -216,11 +216,6 @@ export function createMessageGateway(
       return;
     }
     if (decision.reason === "probe_gate") {
-      const role = options.userRoles?.getRole(message.userId);
-      // Owner can always explicitly @mention to trigger; avoid probe auto-replies.
-      if (role === "owner") {
-        return;
-      }
       if (!probeEnabled) {
         return;
       }
@@ -235,13 +230,14 @@ export function createMessageGateway(
           triggerMessage: message,
         });
         console.log(
-          `[probe] chat=${message.chatId} messageId=${message.messageId} shouldReply=${probeResult.shouldReply}`
+          `[probe] chat=${message.chatId} messageId=${message.messageId} shouldReply=${probeResult.shouldReply} reason=${probeResult.reason}`
         );
         if (!probeResult.shouldReply) {
           return;
         }
       } catch (error) {
-        console.error("message gateway probe failed, falling back to primary:", error);
+        console.error("message gateway probe failed, suppressing auto-reply:", error);
+        return;
       }
     }
 
