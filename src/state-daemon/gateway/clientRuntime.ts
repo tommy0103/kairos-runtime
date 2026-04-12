@@ -1,7 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { inspect } from "node:util";
-import type { TelegramMessage } from "../types/message";
+import type { LLMMessage, TelegramMessage } from "../types/message";
 import { RemoteAsyncIterable } from "../types/remoteAsyncIterable";
 import type { AgentEnclaveClient } from "../enclave/protocol";
 import {
@@ -31,8 +31,17 @@ export type RuntimeReplyStreamEvent =
       delta: string;
     };
 
+export interface ProbeDecision {
+  shouldReply: boolean;
+  reason: string;
+  raw: string;
+}
+
 export interface ClientRuntime {
   recordMessage: (message: TelegramMessage) => Promise<void>;
+  probeShouldReply: (input: {
+    triggerMessage: TelegramMessage;
+  }) => Promise<ProbeDecision>;
   streamReply: (input: {
     triggerMessage: TelegramMessage;
     prompt: string;
@@ -69,6 +78,17 @@ const SESSION_DEBUG_LOG_PATH = join(
   "session-control-blocks.log"
 );
 const LONG_RUNNING_STATUS_INTERVAL_MS = 15000;
+const DEFAULT_PROBE_MODEL_PROVIDER = "ollama";
+
+const PROBE_DECISION_PROMPT = [
+  "You are running in PROBE mode for a Telegram group-chat assistant.",
+  "No one directly @mentioned the bot and no one replied to the bot in this turn.",
+  "Decide whether the bot should speak now.",
+  "Use action='silent' for normal chatter where bot participation is unnecessary.",
+  "Use action='respond' only when a bot reply would clearly add value right now.",
+  "Return JSON only with this schema:",
+  '{"action":"respond"|"silent","reason":"short reason"}',
+].join("\n");
 
 function statusTextForToolStart(toolName: string): string {
   switch (toolName) {
@@ -107,6 +127,70 @@ function statusTextForToolEnd(toolName: string): string {
   }
 }
 
+function toLocalPrompt(messages: LLMMessage[]): string {
+  return messages
+    .map((message) => `[${message.role.toUpperCase()}]\n${message.content}`)
+    .join("\n\n");
+}
+
+function parseProbeDecision(text: string): ProbeDecision {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+  const jsonStart = trimmed.indexOf("{");
+  const jsonEnd = trimmed.lastIndexOf("}") + 1;
+
+  if (jsonStart >= 0 && jsonEnd > jsonStart) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(jsonStart, jsonEnd)) as {
+        action?: unknown;
+        reason?: unknown;
+        shouldReply?: unknown;
+        respond?: unknown;
+      };
+      if (typeof parsed.shouldReply === "boolean") {
+        return {
+          shouldReply: parsed.shouldReply,
+          reason: typeof parsed.reason === "string" ? parsed.reason : "boolean_should_reply",
+          raw: text,
+        };
+      }
+      if (typeof parsed.respond === "boolean") {
+        return {
+          shouldReply: parsed.respond,
+          reason: typeof parsed.reason === "string" ? parsed.reason : "boolean_respond",
+          raw: text,
+        };
+      }
+      if (typeof parsed.action === "string") {
+        const action = parsed.action.trim().toLowerCase();
+        if (action === "respond" || action === "reply" || action === "activate") {
+          return {
+            shouldReply: true,
+            reason: typeof parsed.reason === "string" ? parsed.reason : action,
+            raw: text,
+          };
+        }
+        if (action === "silent" || action === "silence" || action === "ignore" || action === "skip") {
+          return {
+            shouldReply: false,
+            reason: typeof parsed.reason === "string" ? parsed.reason : action,
+            raw: text,
+          };
+        }
+      }
+    } catch {
+    }
+  }
+
+  if (/\b(silent|silence|ignore|skip|no)\b/.test(lower)) {
+    return { shouldReply: false, reason: "keyword_silent", raw: text };
+  }
+  if (/\b(respond|reply|speak|activate|yes)\b/.test(lower)) {
+    return { shouldReply: true, reason: "keyword_respond", raw: text };
+  }
+  return { shouldReply: false, reason: "unrecognized", raw: text };
+}
+
 export function createClientRuntime(options: CreateClientRuntimeOptions): ClientRuntime {
   const enclaveClient =
     options.enclaveClient;
@@ -132,6 +216,43 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
       }),
     });
   const contextAssembler = options.contextAssembler ?? createContextAssembler();
+  const probeProvider = (
+    process.env.STATE_DAEMON_PROBE_MODEL_PROVIDER ??
+    process.env.PROBE_MODEL_PROVIDER ??
+    DEFAULT_PROBE_MODEL_PROVIDER
+  ).toLowerCase();
+  const probeLocalModel = createOllamaLocalModel({
+    baseUrl:
+      process.env.STATE_DAEMON_PROBE_OLLAMA_BASE_URL ??
+      options.modelConfig?.llm?.ollama?.baseUrl,
+    model:
+      process.env.STATE_DAEMON_PROBE_OLLAMA_MODEL ??
+      options.modelConfig?.llm?.ollama?.model,
+  });
+  const probeCloudModel = createOpenAICloudModel({
+    apiKey:
+      process.env.STATE_DAEMON_PROBE_CLOUD_API_KEY ??
+      options.modelConfig?.llm?.cloud?.apiKey,
+    baseURL:
+      process.env.STATE_DAEMON_PROBE_CLOUD_BASE_URL ??
+      options.modelConfig?.llm?.cloud?.baseURL,
+    model:
+      process.env.STATE_DAEMON_PROBE_CLOUD_MODEL ??
+      options.modelConfig?.llm?.cloud?.model,
+  });
+
+  const buildContextMessages = (triggerMessage: TelegramMessage): LLMMessage[] => {
+    const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
+      chatId: triggerMessage.chatId,
+      messageId: triggerMessage.messageId,
+    });
+    return contextAssembler.build({
+      contextMessages: sessionMessages,
+      recentMessages,
+      triggerMessage,
+      systemPrompt: system(),
+    });
+  };
 
   const recordMessage: ClientRuntime["recordMessage"] = async (message) => {
     await contextStore.ingestMessage({ message });
@@ -150,6 +271,21 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
     }
   };
 
+  const probeShouldReply: ClientRuntime["probeShouldReply"] = async ({
+    triggerMessage,
+  }) => {
+    const messages: LLMMessage[] = [
+      ...buildContextMessages(triggerMessage),
+      { role: "user", content: PROBE_DECISION_PROMPT },
+    ];
+
+    const text =
+      probeProvider === "cloud"
+        ? (await probeCloudModel.complete({ messages })).text
+        : (await probeLocalModel.complete({ prompt: toLocalPrompt(messages) })).text;
+    return parseProbeDecision(text);
+  };
+
   const streamReply: ClientRuntime["streamReply"] = ({ triggerMessage, prompt }) => {
     const stream = new RemoteAsyncIterable<RuntimeReplyStreamEvent>();
     void (async () => {
@@ -162,16 +298,14 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
           text: "Retrieving memory and conversation context...",
         });
 
-        const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
-          chatId: triggerMessage.chatId,
-          messageId: triggerMessage.messageId,
-        });
-        const llmMessages = contextAssembler.build({
-          contextMessages: sessionMessages,
-          recentMessages,
-          triggerMessage,
-          systemPrompt: system(),
-        });
+        const llmMessages = buildContextMessages(triggerMessage);
+        const normalizedPrompt = prompt.trim();
+        if (normalizedPrompt) {
+          llmMessages.push({
+            role: "user",
+            content: `Additional response guideline:\n${normalizedPrompt}`,
+          });
+        }
 
         stream.push({
           type: "status_update",
@@ -250,6 +384,7 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
 
   return {
     recordMessage,
+    probeShouldReply,
     streamReply,
   };
 }

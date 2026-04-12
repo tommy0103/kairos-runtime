@@ -98,6 +98,10 @@ export interface CreateMessageGatewayOptions {
   userRoles?: UserRolesStore;
   mergeWindowMs?: number;
   enableEditedMessageTrigger?: boolean;
+  probe?: {
+    enabled?: boolean;
+    cooldownMs?: number;
+  };
 }
 
 export interface MessageGateway {
@@ -148,6 +152,9 @@ export function createMessageGateway(
   const policies = [...options.policies].sort(
     (a, b) => a.priority - b.priority
   );
+  const probeEnabled = options.probe?.enabled ?? false;
+  const probeCooldownMs = Math.max(0, options.probe?.cooldownMs ?? 45000);
+  const lastProbeAtByChat = new Map<number, number>();
 
   const recordNormalizedMessage = async (message: TelegramMessage) => {
     try {
@@ -182,6 +189,30 @@ export function createMessageGateway(
 
     if (!decision.shouldTrigger || !decision.prompt) {
       return;
+    }
+    if (decision.reason === "probe_gate") {
+      if (!probeEnabled) {
+        return;
+      }
+      const now = Date.now();
+      const lastProbeAt = lastProbeAtByChat.get(message.chatId) ?? 0;
+      if (now - lastProbeAt < probeCooldownMs) {
+        return;
+      }
+      lastProbeAtByChat.set(message.chatId, now);
+      try {
+        const probeResult = await options.runtime.probeShouldReply({
+          triggerMessage: message,
+        });
+        console.log(
+          `[probe] chat=${message.chatId} messageId=${message.messageId} shouldReply=${probeResult.shouldReply}`
+        );
+        if (!probeResult.shouldReply) {
+          return;
+        }
+      } catch (error) {
+        console.error("message gateway probe failed, falling back to primary:", error);
+      }
     }
 
     // 判定 Bot
@@ -243,7 +274,7 @@ export function createMessageGateway(
       let hasOutput = false;
       for await (const event of options.runtime.streamReply({
         triggerMessage: message,
-        prompt: decision.prompt + instruction,
+        prompt: instruction,
       })) {
         if (event.type === "status_update") {
           applyStatus(event);

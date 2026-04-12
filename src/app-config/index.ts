@@ -51,6 +51,8 @@ interface StateDaemonConfig {
   triggers: {
     editedMessage: boolean;
     privateChat: boolean;
+    probeGate: boolean;
+    probeCooldownMs: number;
   };
   model: {
     llm: {
@@ -321,6 +323,7 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
   const grpcConfig = requireObject(stateConfig.grpc, "stateDaemon.grpc");
   const telegramConfig = requireObject(stateConfig.telegram, "stateDaemon.telegram");
   const triggersConfig = isObject(stateConfig.triggers) ? stateConfig.triggers : {};
+  const probeTriggerConfig = isObject(triggersConfig.probe) ? triggersConfig.probe : {};
   const modelConfig = requireObject(stateConfig.model, "stateDaemon.model");
   const llmConfig = requireObject(modelConfig.llm, "stateDaemon.model.llm");
   const llmOllamaConfig = requireObject(llmConfig.ollama, "stateDaemon.model.llm.ollama");
@@ -467,6 +470,17 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
     triggers: {
       editedMessage: resolveBoolean(triggersConfig.editedMessage, "stateDaemon.triggers.editedMessage", true),
       privateChat: resolveBoolean(triggersConfig.privateChat, "stateDaemon.triggers.privateChat", true),
+      probeGate: resolveBoolean(
+        process.env.TRIGGER_PROBE_GATE ?? probeTriggerConfig.enabled ?? triggersConfig.probeGate,
+        "stateDaemon.triggers.probeGate",
+        true,
+      ),
+      probeCooldownMs: resolveInteger(
+        process.env.TRIGGER_PROBE_COOLDOWN_MS ?? probeTriggerConfig.cooldownMs ?? triggersConfig.probeCooldownMs,
+        "stateDaemon.triggers.probeCooldownMs",
+        45000,
+        0,
+      ),
     },
     model: {
       llm: {

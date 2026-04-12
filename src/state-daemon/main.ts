@@ -3,6 +3,7 @@ import {
   createMentionMeTriggerPolicy,
   createMessageGateway,
   createPrivateChatTriggerPolicy,
+  createProbeGateTriggerPolicy,
   createReplyToMeTriggerPolicy,
 } from "./gateway";
 import { loadStateDaemonConfig } from "@kairos-runtime/app-config";
@@ -58,6 +59,7 @@ const policies = [
   createReplyToMeTriggerPolicy(),
   createMentionMeTriggerPolicy(),
   ...(config.triggers.privateChat ? [createPrivateChatTriggerPolicy()] : []),
+  ...(config.triggers.probeGate ? [createProbeGateTriggerPolicy()] : []),
 ];
 
 const gateway = createMessageGateway({
@@ -66,6 +68,10 @@ const gateway = createMessageGateway({
   policies,
   userRoles,
   enableEditedMessageTrigger: config.triggers.editedMessage,
+  probe: {
+    enabled: config.triggers.probeGate,
+    cooldownMs: config.triggers.probeCooldownMs,
+  },
 });
 
 process.on("SIGINT", () => {

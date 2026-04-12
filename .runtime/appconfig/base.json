@@ -37,7 +37,11 @@
     },
     "triggers": {
       "editedMessage": "${ENV:TRIGGER_EDITED_MESSAGE:-true}",
-      "privateChat": "${ENV:TRIGGER_PRIVATE_CHAT:-true}"
+      "privateChat": "${ENV:TRIGGER_PRIVATE_CHAT:-true}",
+      "probe": {
+        "enabled": "${ENV:TRIGGER_PROBE_GATE:-true}",
+        "cooldownMs": "${ENV:TRIGGER_PROBE_COOLDOWN_MS:-45000}"
+      }
     },
     "model": {
       "llm": {
