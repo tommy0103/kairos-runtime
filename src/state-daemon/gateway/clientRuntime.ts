@@ -379,10 +379,7 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
             continue;
           }
           if (event.type === "message_update" && event.role === "assistant" && event.delta) {
-            if (sendMessageMode === "strict") {
-              continue;
-            }
-            if (!startedStreamingText) {
+            if (sendMessageMode !== "strict" && !startedStreamingText) {
               stream.push({
                 type: "status_update",
                 stage: "streaming",
