@@ -40,6 +40,7 @@ export const system = () => {
     # Output Contract
     - Your direct assistant text is private internal monologue and is NOT shown to users.
     - To send user-visible messages, you MUST call ${quote("send_message")}.
+    - If you decide to reply, call ${quote("send_message")} at least once before the run ends.
     - You may call ${quote("send_message")} multiple times in one run. Each call sends one message.
     - Use ${quote("await_response=true")} when you plan to continue with more actions after sending.
     - If no reply is needed, do not call ${quote("send_message")} and stay silent.

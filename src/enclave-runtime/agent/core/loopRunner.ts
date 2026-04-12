@@ -74,6 +74,7 @@ export interface CreateAgentLoopRunnerOptions {
 
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_SEND_MESSAGE_MODE = "strict";
+const DEFAULT_STRICT_TEXT_FALLBACK = true;
 type SendMessageMode = "strict" | "compat";
 
 function createCompatibleModel(modelId: string, baseURL: string): Model<"openai-completions"> {
@@ -177,6 +178,17 @@ function resolveSendMessageMode(): SendMessageMode {
     return "compat";
   }
   return DEFAULT_SEND_MESSAGE_MODE;
+}
+
+function resolveStrictTextFallbackEnabled(): boolean {
+  const raw = process.env.ENCLAVE_STRICT_TEXT_FALLBACK?.trim().toLowerCase();
+  if (!raw) {
+    return DEFAULT_STRICT_TEXT_FALLBACK;
+  }
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
+    return false;
+  }
+  return true;
 }
 
 function extractSendMessagePayload(result: unknown): {
@@ -328,6 +340,7 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     let globalMessageHasEmitted = false;
     let messageSentViaTool = false;
     const sendMessageMode = resolveSendMessageMode();
+    const strictTextFallbackEnabled = resolveStrictTextFallbackEnabled();
     try {
       console.log("[loopRunner] calling agentLoop with messages:", messages.length);
       const stream = agentLoop(
@@ -408,6 +421,28 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
                 delta: output,
               };
             }
+          } else if (
+            !currentMessageHasToolCall &&
+            sendMessageMode === "strict" &&
+            strictTextFallbackEnabled &&
+            !messageSentViaTool
+          ) {
+            let output = currentMessageTextBuffer;
+            if (!output && Array.isArray(message.content)) {
+              output = message.content
+                .filter((block) => block.type === "text" && typeof block.text === "string")
+                .map((block) => block.text as string)
+                .join("");
+            }
+            if (output) {
+              globalMessageHasEmitted = true;
+              console.warn("[loopRunner] strict fallback: emitting plain text because send_message was not called");
+              yield {
+                type: "message_update",
+                role: "assistant",
+                delta: output,
+              };
+            }
           }
           currentMessageHasToolCall = false;
           currentMessageTextBuffer = "";
@@ -470,13 +505,19 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
         }
       }
 
-      if (!globalMessageHasEmitted && sendMessageMode === "compat" && !messageSentViaTool) {
+      if (!globalMessageHasEmitted && !messageSentViaTool) {
         const newMessages = await stream.result();
         const fallbackText = extractAssistantTextFromMessages(newMessages);
         console.log(
           `[loopRunner] fallback extraction: found=${Boolean(fallbackText)} length=${fallbackText.length}`
         );
-        if (fallbackText) {
+        const canEmitFallbackText =
+          sendMessageMode === "compat" ||
+          (sendMessageMode === "strict" && strictTextFallbackEnabled);
+        if (fallbackText && canEmitFallbackText) {
+          if (sendMessageMode === "strict") {
+            console.warn("[loopRunner] strict fallback extraction: emitting plain text because send_message was not called");
+          }
           yield {
             type: "message_update",
             role: "assistant",

@@ -306,6 +306,18 @@ export function createMessageGateway(
             applyStatus(event);
             continue;
           }
+          if (event.type === "send_message") {
+            const chunk = event.text.trim();
+            if (chunk) {
+              const needsSpacer = hasOutput;
+              options.telegram.appendStream(
+                streamMessageId,
+                needsSpacer ? `\n\n${chunk}` : chunk
+              );
+              hasOutput = true;
+            }
+            continue;
+          }
           if (event.type === "message_delta") {
             options.telegram.appendStream(streamMessageId, event.delta);
             hasOutput = true;
@@ -346,6 +358,7 @@ export function createMessageGateway(
     let typingTimer: ReturnType<typeof setInterval> | null = null;
     let longWaitTimer: ReturnType<typeof setTimeout> | null = null;
     let sentMessagesCount = 0;
+    const strictFallbackTextChunks: string[] = [];
     let longWaitHintSent = false;
     try {
       await options.telegram.sendTyping(message.chatId);
@@ -384,6 +397,21 @@ export function createMessageGateway(
             message.chatId,
             event.text,
             replyToMessageId
+          );
+          sentMessagesCount += 1;
+          continue;
+        }
+        if (event.type === "message_delta" && event.delta) {
+          strictFallbackTextChunks.push(event.delta);
+        }
+      }
+      if (sentMessagesCount === 0) {
+        const fallbackText = strictFallbackTextChunks.join("").trim();
+        if (fallbackText) {
+          await options.telegram.reply(
+            message.chatId,
+            fallbackText,
+            message.messageId
           );
           sentMessagesCount += 1;
         }
