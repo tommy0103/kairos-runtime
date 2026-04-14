@@ -302,6 +302,8 @@ export function createMessageGateway(
         for await (const event of options.runtime.streamReply({
           triggerMessage: message,
           prompt: instruction,
+          isProbeActivated: decision.reason === "probe_gate",
+          triggerReason: decision.reason,
         })) {
           if (event.type === "status_update") {
             applyStatus(event);
@@ -386,9 +388,11 @@ export function createMessageGateway(
       }
 
       for await (const event of options.runtime.streamReply({
-        triggerMessage: message,
-        prompt: instruction,
-      })) {
+          triggerMessage: message,
+          prompt: instruction,
+          isProbeActivated: decision.reason === "probe_gate",
+          triggerReason: decision.reason,
+        })) {
         if (event.type === "status_update") {
           continue;
         }

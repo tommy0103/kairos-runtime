@@ -5,14 +5,17 @@ import type { LLMMessage, TelegramMessage } from "../types/message";
 import { RemoteAsyncIterable } from "../types/remoteAsyncIterable";
 import type { AgentEnclaveClient } from "../enclave/protocol";
 import {
+  buildSystemPromptInput,
   createContextAssembler,
   createInMemoryContextStore,
+  formatTimeNow,
+  renderLateBindingPrompt,
+  renderSystemPrompt,
   type ContextAssembler,
   type ContextStore,
 } from "./context";
 import { createOllamaLocalModel, createOpenAICloudModel } from "../model/llm";
 import { createDenseEmbedder } from "../model/embedding";
-import { system } from "./context";
 
 export type RuntimeReplyStage =
   | "retrieving_context"
@@ -52,6 +55,8 @@ export interface ClientRuntime {
   streamReply: (input: {
     triggerMessage: TelegramMessage;
     prompt: string;
+    isProbeActivated?: boolean;
+    triggerReason?: string;
   }) => AsyncIterable<RuntimeReplyStreamEvent>;
 }
 
@@ -87,19 +92,7 @@ const SESSION_DEBUG_LOG_PATH = join(
 const LONG_RUNNING_STATUS_INTERVAL_MS = 15000;
 const DEFAULT_PROBE_MODEL_PROVIDER = "ollama";
 const DEFAULT_SEND_MESSAGE_MODE = "strict";
-
 type SendMessageMode = "strict" | "compat";
-
-const PROBE_DECISION_PROMPT = [
-  "You are running in PROBE mode for a Telegram group-chat assistant.",
-  "No one directly @mentioned the bot and no one replied to the bot in this turn.",
-  "Decide whether the bot should speak now.",
-  "Default to silent unless a reply is clearly necessary and high-value.",
-  "Use action='silent' for normal chatter where bot participation is unnecessary.",
-  "Use action='respond' only when a bot reply would clearly add value right now.",
-  "Return JSON only with this schema:",
-  '{"action":"respond"|"silent","reason":"short reason"}',
-].join("\n");
 
 function statusTextForToolStart(toolName: string): string {
   switch (toolName) {
@@ -268,16 +261,24 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
       options.modelConfig?.llm?.cloud?.model,
   });
 
-  const buildContextMessages = (triggerMessage: TelegramMessage): LLMMessage[] => {
+  const buildContextMessages = async (
+    triggerMessage: TelegramMessage,
+    sendMessageMode: SendMessageMode,
+  ): Promise<LLMMessage[]> => {
     const [recentMessages, sessionMessages] = contextStore.getContextByAnchor({
       chatId: triggerMessage.chatId,
       messageId: triggerMessage.messageId,
     });
+
+    const systemPrompt = await renderSystemPrompt(
+      buildSystemPromptInput({ sendMessageMode }),
+    );
+
     return contextAssembler.build({
       contextMessages: sessionMessages,
       recentMessages,
       triggerMessage,
-      systemPrompt: system(),
+      systemPrompt,
     });
   };
 
@@ -301,10 +302,18 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
   const probeShouldReply: ClientRuntime["probeShouldReply"] = async ({
     triggerMessage,
   }) => {
-    const messages: LLMMessage[] = [
-      ...buildContextMessages(triggerMessage),
-      { role: "user", content: PROBE_DECISION_PROMPT },
-    ];
+    const sendMessageMode = resolveSendMessageMode();
+    const messages = await buildContextMessages(triggerMessage, sendMessageMode);
+    const lateBindingPrompt = await renderLateBindingPrompt({
+      timeNow: formatTimeNow(),
+      isProbeEnabled: true,
+      isProbing: true,
+      isMentioned: triggerMessage.metadata.isMentionMe,
+      isReplied: triggerMessage.metadata.isReplyToMe,
+      triggerReason: "probe_gate",
+    });
+
+    messages.push({ role: "user", content: lateBindingPrompt });
 
     const text =
       probeProvider === "cloud"
@@ -313,7 +322,12 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
     return parseProbeDecision(text);
   };
 
-  const streamReply: ClientRuntime["streamReply"] = ({ triggerMessage, prompt }) => {
+  const streamReply: ClientRuntime["streamReply"] = ({
+    triggerMessage,
+    prompt,
+    isProbeActivated,
+    triggerReason,
+  }) => {
     const stream = new RemoteAsyncIterable<RuntimeReplyStreamEvent>();
     void (async () => {
       const sendMessageMode = resolveSendMessageMode();
@@ -326,14 +340,18 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
           text: "Retrieving memory and conversation context...",
         });
 
-        const llmMessages = buildContextMessages(triggerMessage);
+        const llmMessages = await buildContextMessages(triggerMessage, sendMessageMode);
         const normalizedPrompt = prompt.trim();
-        if (normalizedPrompt) {
-          llmMessages.push({
-            role: "user",
-            content: `Additional response guideline:\n${normalizedPrompt}`,
-          });
-        }
+        const lateBindingPrompt = await renderLateBindingPrompt({
+          timeNow: formatTimeNow(),
+          isProbeEnabled: isProbeActivated === true,
+          isProbing: false,
+          isMentioned: triggerMessage.metadata.isMentionMe,
+          isReplied: triggerMessage.metadata.isReplyToMe,
+          extraGuideline: normalizedPrompt || undefined,
+          triggerReason,
+        });
+        llmMessages.push({ role: "user", content: lateBindingPrompt });
 
         stream.push({
           type: "status_update",
