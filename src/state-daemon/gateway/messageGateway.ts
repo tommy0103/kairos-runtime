@@ -297,38 +297,47 @@ export function createMessageGateway(
       return;
     }
 
+
     if (!decision.shouldTrigger || !decision.prompt) {
       return;
     }
+
+    // 判定 Bot / Owner（owner 在 probe_gate 下可绕过 silent 判定）
+    const role = options.userRoles?.getRole(message.userId);
+    const isOwner = role === "owner";
+
     if (decision.reason === "probe_gate") {
       if (!probeEnabled) {
         return;
       }
-      const now = Date.now();
-      const lastProbeAt = lastProbeAtByChat.get(message.chatId) ?? 0;
-      if (now - lastProbeAt < probeCooldownMs) {
-        return;
-      }
-      lastProbeAtByChat.set(message.chatId, now);
-      try {
-        const probeResult = await options.runtime.probeShouldReply({
-          triggerMessage: message,
-        });
-        console.log(
-          `[probe] chat=${message.chatId} messageId=${message.messageId} shouldReply=${probeResult.shouldReply} reason=${probeResult.reason}`
-        );
-        if (!probeResult.shouldReply) {
+
+      if (!isOwner) {
+        const now = Date.now();
+        const lastProbeAt = lastProbeAtByChat.get(message.chatId) ?? 0;
+        if (now - lastProbeAt < probeCooldownMs) {
           return;
         }
-      } catch (error) {
-        console.error("message gateway probe failed, suppressing auto-reply:", error);
-        return;
+        lastProbeAtByChat.set(message.chatId, now);
+        try {
+          const probeResult = await options.runtime.probeShouldReply({
+            triggerMessage: message,
+          });
+          console.log(
+            `[probe] chat=${message.chatId} messageId=${message.messageId} shouldReply=${probeResult.shouldReply} reason=${probeResult.reason}`
+          );
+          if (!probeResult.shouldReply) {
+            return;
+          }
+        } catch (error) {
+          console.error("message gateway probe failed, suppressing auto-reply:", error);
+          return;
+        }
+      } else {
+        console.log(
+          `[probe] owner bypass chat=${message.chatId} messageId=${message.messageId} reason=probe_gate`
+        );
       }
     }
-
-    // 判定 Bot
-    const role = options.userRoles?.getRole(message.userId);
-    const isOwner = role === "owner";
     const username = (message.metadata.username || "").toLowerCase();
     
     // 满足以下任一条件才视为机器人行为（触发热度衰减）：
