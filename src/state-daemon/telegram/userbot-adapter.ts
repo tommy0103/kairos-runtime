@@ -244,6 +244,46 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     }
   };
 
+
+  const isReplyingToMe = async (
+    chatId: number,
+    replyToMsgId: number | null,
+  ): Promise<boolean> => {
+    if (!me || replyToMsgId === null) {
+      return false;
+    }
+    if (sentMessageIds.has(replyToMsgId)) {
+      return true;
+    }
+
+    try {
+      const target = await getSafeEntity(chatId);
+      const fetched = await (client as any).getMessages(target, {
+        ids: [replyToMsgId],
+      });
+      const repliedMessage = Array.isArray(fetched)
+        ? fetched[0]
+        : (fetched as { [index: number]: unknown })?.[0] ?? fetched;
+
+      if (repliedMessage instanceof Api.Message) {
+        const repliedFromId = repliedMessage.fromId;
+        if (
+          repliedFromId instanceof Api.PeerUser &&
+          repliedFromId.userId.toString() === me.id.toString()
+        ) {
+          sentMessageIds.add(replyToMsgId);
+          return true;
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `[userbot] Failed to resolve reply target chat=${chatId} replyTo=${replyToMsgId}:`,
+        error,
+      );
+    }
+
+    return false;
+  };
   const toTelegramMessage = async (msg: Api.Message, photoCountOverride?: number, photoPaths?: string[]): Promise<TelegramMessage | null> => {
     if (!me || !msg.peerId) return null;
     const fromId = msg.fromId;
@@ -268,8 +308,8 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       conversationType === "private" ||
       (myUsername ? text.includes(`@${myUsername}`) : false);
 
-    // Reply detection.
-    const isReplyToMe = replyToMsgId !== null && sentMessageIds.has(replyToMsgId);
+    // Reply detection (cache + network fallback for post-restart historical replies).
+    const isReplyToMe = await isReplyingToMe(chatId, replyToMsgId);
     
     // Detect bot-like sender and resolve display name.
     let isBot = false;
@@ -325,7 +365,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       customEmojiInfoById
     );
 
-    console.log(`[userbot] Ingested: from=${userId} (${senderName}) chat=${chatId} text="${text.slice(0, 20)}..." photo=${photoCount} mention=${isMentionMe}`);
+    console.log(`[userbot] Ingested: from=${userId} (${senderName}) chat=${chatId} text="${text.slice(0, 20)}..." photo=${photoCount} mention=${isMentionMe} reply=${isReplyToMe} replyTo=${replyToMsgId === null ? "-" : replyToMsgId}`);
 
     return {
       userId, messageId: msg.id, chatId, conversationType, 

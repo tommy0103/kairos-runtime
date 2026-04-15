@@ -249,6 +249,9 @@ function buildMergedMessage(messages: TelegramMessage[]): TelegramMessage {
     .map((item) => item.context)
     .filter((item) => item.length > 0)
     .join("\n");
+  const replySignal =
+    messages.find((item) => item.metadata.isReplyToMe) ??
+    messages.find((item) => item.metadata.replyToMessageId !== null);
 
   return {
     ...last,
@@ -256,9 +259,9 @@ function buildMergedMessage(messages: TelegramMessage[]): TelegramMessage {
     timestamp: last.timestamp,
     metadata: {
       ...last.metadata,
-      replyToMessageId: null,
-      replyToUserId: null,
-      isReplyToMe: false,
+      replyToMessageId: replySignal?.metadata.replyToMessageId ?? null,
+      replyToUserId: replySignal?.metadata.replyToUserId ?? null,
+      isReplyToMe: messages.some((item) => item.metadata.isReplyToMe),
       isMentionMe: messages.some((item) => item.metadata.isMentionMe),
       mentions: mergedMentions,
     },
