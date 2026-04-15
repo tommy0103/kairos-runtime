@@ -302,7 +302,8 @@ export function createMessageGateway(
       return;
     }
 
-    // 判定 Bot / Owner（owner 在 probe_gate 下可绕过 silent 判定）
+
+    // 判定 Bot
     const role = options.userRoles?.getRole(message.userId);
     const isOwner = role === "owner";
 
@@ -310,32 +311,25 @@ export function createMessageGateway(
       if (!probeEnabled) {
         return;
       }
-
-      if (!isOwner) {
-        const now = Date.now();
-        const lastProbeAt = lastProbeAtByChat.get(message.chatId) ?? 0;
-        if (now - lastProbeAt < probeCooldownMs) {
-          return;
-        }
-        lastProbeAtByChat.set(message.chatId, now);
-        try {
-          const probeResult = await options.runtime.probeShouldReply({
-            triggerMessage: message,
-          });
-          console.log(
-            `[probe] chat=${message.chatId} messageId=${message.messageId} shouldReply=${probeResult.shouldReply} reason=${probeResult.reason}`
-          );
-          if (!probeResult.shouldReply) {
-            return;
-          }
-        } catch (error) {
-          console.error("message gateway probe failed, suppressing auto-reply:", error);
-          return;
-        }
-      } else {
+      const now = Date.now();
+      const lastProbeAt = lastProbeAtByChat.get(message.chatId) ?? 0;
+      if (now - lastProbeAt < probeCooldownMs) {
+        return;
+      }
+      lastProbeAtByChat.set(message.chatId, now);
+      try {
+        const probeResult = await options.runtime.probeShouldReply({
+          triggerMessage: message,
+        });
         console.log(
-          `[probe] owner bypass chat=${message.chatId} messageId=${message.messageId} reason=probe_gate`
+          `[probe] chat=${message.chatId} messageId=${message.messageId} shouldReply=${probeResult.shouldReply} reason=${probeResult.reason}`
         );
+        if (!probeResult.shouldReply) {
+          return;
+        }
+      } catch (error) {
+        console.error("message gateway probe failed, suppressing auto-reply:", error);
+        return;
       }
     }
     const username = (message.metadata.username || "").toLowerCase();
