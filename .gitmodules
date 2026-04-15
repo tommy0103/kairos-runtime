@@ -3,4 +3,4 @@
 	url = https://github.com/kentchang/dramatic-conversation-disentanglement
 [submodule "src/vfs"]
 	path = src/vfs
-	url = git@github.com:kairos-plan9/logos-fs
+	url = https://github.com/vahiru/logos-fs
