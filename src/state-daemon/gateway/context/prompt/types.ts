@@ -13,6 +13,7 @@ export interface RenderSystemPromptInput {
 export interface RenderLateBindingPromptInput {
   timeNow: string;
   timeZoneLabel?: string;
+  conversationType?: "private" | "group" | "supergroup" | "channel";
   isProbeEnabled?: boolean;
   isProbing?: boolean;
   isMentioned?: boolean;

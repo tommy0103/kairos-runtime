@@ -2,6 +2,7 @@
 defineProps({
   timeNow: { type: String, required: true },
   timeZoneLabel: { type: String, default: 'Asia/Shanghai' },
+  conversationType: { type: String, default: 'private' },
   isProbeEnabled: { type: Boolean, default: false },
   isProbing: { type: Boolean, default: false },
   isMentioned: { type: Boolean, default: false },
@@ -63,7 +64,19 @@ No direct trigger signal. Prefer silence unless your reply adds clear value.
 
 </div>
 
+<div v-if="conversationType === 'group' || conversationType === 'supergroup'">
+
+Group chat output shape:
+- Prefer short-burst chat rhythm over one long paragraph.
+- Keep one idea per `send_message`.
+- Target 8-30 Chinese chars (or <= 60 mixed chars) per message.
+- If needed, split into 2-4 messages.
+- Avoid list formatting unless explicitly requested by the user.
+
+</div>
+
 When acting:
 - Keep responses concise and useful.
 - If multiple independent tool calls are needed, run them in parallel.
 - Use `await_response=true` when you need to continue after sending a message.
+- If a drafted message looks paragraph-like, rewrite shorter and split before sending.

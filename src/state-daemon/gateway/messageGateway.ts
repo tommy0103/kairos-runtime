@@ -111,6 +111,7 @@ export interface MessageGateway {
 const DEFAULT_LONG_WAIT_HINT_DELAY_MS = 120000;
 const TYPING_REFRESH_MS = 4000;
 const DEFAULT_SEND_MESSAGE_MODE = "strict";
+const DEFAULT_GROUP_REPLY_SOFT_LIMIT = 60;
 type SendMessageMode = "strict" | "compat";
 
 function resolveSendMessageMode(): SendMessageMode {
@@ -133,6 +134,89 @@ function resolveLongWaitHintDelayMs(): number {
   return parsed;
 }
 
+
+function resolveGroupReplySoftLimit(): number {
+  const raw = process.env.STATE_DAEMON_GROUP_REPLY_SOFT_LIMIT?.trim();
+  if (!raw) {
+    return DEFAULT_GROUP_REPLY_SOFT_LIMIT;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_GROUP_REPLY_SOFT_LIMIT;
+  }
+  return Math.min(200, Math.max(20, parsed));
+}
+
+function isGroupConversationType(conversationType: TelegramMessage["conversationType"]): boolean {
+  return conversationType === "group" || conversationType === "supergroup";
+}
+
+function splitGroupReplyText(text: string, softLimit: number): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (trimmed.length <= softLimit) {
+    return [trimmed];
+  }
+
+  const paragraphs = trimmed
+    .split(/\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const fragments: string[] = [];
+  for (const paragraph of paragraphs) {
+    const parts = paragraph.match(/[^。！？!?；;…]+[。！？!?；;…]?/g) ?? [paragraph];
+    for (const part of parts) {
+      const clean = part.trim();
+      if (clean) {
+        fragments.push(clean);
+      }
+    }
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+
+  const flushCurrent = () => {
+    const normalized = current.trim();
+    if (normalized) {
+      chunks.push(normalized);
+    }
+    current = "";
+  };
+
+  for (const fragment of fragments) {
+    if (fragment.length > softLimit) {
+      flushCurrent();
+      for (let index = 0; index < fragment.length; index += softLimit) {
+        const slice = fragment.slice(index, index + softLimit).trim();
+        if (slice) {
+          chunks.push(slice);
+        }
+      }
+      continue;
+    }
+
+    if (!current) {
+      current = fragment;
+      continue;
+    }
+
+    const joiner = /[A-Za-z0-9]$/.test(current) && /^[A-Za-z0-9]/.test(fragment) ? " " : "";
+    const next = `${current}${joiner}${fragment}`;
+    if (next.length <= softLimit) {
+      current = next;
+      continue;
+    }
+
+    flushCurrent();
+    current = fragment;
+  }
+
+  flushCurrent();
+  return chunks.length > 0 ? chunks : [trimmed];
+}
 function estimateReplyEtaSeconds(message: TelegramMessage): { min: number; max: number } {
   let min = 30;
   let max = 90;
@@ -179,6 +263,7 @@ export function createMessageGateway(
   const probeCooldownMs = Math.max(0, options.probe?.cooldownMs ?? 45000);
   const sendMessageMode = resolveSendMessageMode();
   const longWaitHintDelayMs = resolveLongWaitHintDelayMs();
+  const groupReplySoftLimit = resolveGroupReplySoftLimit();
   const lastProbeAtByChat = new Map<number, number>();
 
   const recordNormalizedMessage = async (message: TelegramMessage) => {
@@ -398,12 +483,17 @@ export function createMessageGateway(
         }
         if (event.type === "send_message") {
           const replyToMessageId = event.replyToMessageId ?? message.messageId;
-          await options.telegram.reply(
-            message.chatId,
-            event.text,
-            replyToMessageId
-          );
-          sentMessagesCount += 1;
+          const replyChunks = isGroupConversationType(message.conversationType)
+            ? splitGroupReplyText(event.text, groupReplySoftLimit)
+            : [event.text.trim()].filter(Boolean);
+          for (const replyChunk of replyChunks) {
+            await options.telegram.reply(
+              message.chatId,
+              replyChunk,
+              replyToMessageId
+            );
+            sentMessagesCount += 1;
+          }
           continue;
         }
         if (event.type === "message_delta" && event.delta) {
@@ -413,12 +503,17 @@ export function createMessageGateway(
       if (sentMessagesCount === 0) {
         const fallbackText = strictFallbackTextChunks.join("").trim();
         if (fallbackText) {
-          await options.telegram.reply(
-            message.chatId,
-            fallbackText,
-            message.messageId
-          );
-          sentMessagesCount += 1;
+          const fallbackChunks = isGroupConversationType(message.conversationType)
+            ? splitGroupReplyText(fallbackText, groupReplySoftLimit)
+            : [fallbackText];
+          for (const fallbackChunk of fallbackChunks) {
+            await options.telegram.reply(
+              message.chatId,
+              fallbackChunk,
+              message.messageId
+            );
+            sentMessagesCount += 1;
+          }
         }
       }
     } catch (error) {

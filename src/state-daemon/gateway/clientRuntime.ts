@@ -306,6 +306,7 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
     const messages = await buildContextMessages(triggerMessage, sendMessageMode);
     const lateBindingPrompt = await renderLateBindingPrompt({
       timeNow: formatTimeNow(),
+      conversationType: triggerMessage.conversationType,
       isProbeEnabled: true,
       isProbing: true,
       isMentioned: triggerMessage.metadata.isMentionMe,
@@ -344,6 +345,7 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
         const normalizedPrompt = prompt.trim();
         const lateBindingPrompt = await renderLateBindingPrompt({
           timeNow: formatTimeNow(),
+          conversationType: triggerMessage.conversationType,
           isProbeEnabled: isProbeActivated === true,
           isProbing: false,
           isMentioned: triggerMessage.metadata.isMentionMe,
