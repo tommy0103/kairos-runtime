@@ -639,7 +639,7 @@ async function toTelegramMessage(
     timestamp: (message.date ?? Math.floor(Date.now() / 1000)) * 1000,
     metadata: {
       isBot: message.from?.is_bot ?? false,
-      username: message.from?.username ?? message.from?.first_name ?? null,
+      username: buildDisplayName(message.from),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
       isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
@@ -677,7 +677,7 @@ async function toEditedTelegramMessage(
     timestamp: (message.date ?? Math.floor(Date.now() / 1000)) * 1000,
     metadata: {
       isBot: message.from?.is_bot ?? false,
-      username: message.from?.username ?? message.from?.first_name ?? null,
+      username: buildDisplayName(message.from),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
       isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
@@ -706,7 +706,7 @@ function toOutgoingTelegramMessage(
     timestamp: (message.date ?? Math.floor(Date.now() / 1000)) * 1000,
     metadata: {
       isBot: message.from?.is_bot ?? true,
-      username: message.from?.username ?? null,
+      username: buildDisplayName(message.from),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
       isReplyToMe: false,
@@ -757,7 +757,7 @@ function toEditedResultMessage(
     timestamp: (result.date ?? Math.floor(Date.now() / 1000)) * 1000,
     metadata: {
       ...baseMetadata,
-      username: result.from?.username ?? state.username,
+      username: buildDisplayName(result.from) ?? state.username,
     },
   };
 }
@@ -772,6 +772,24 @@ function toConversationType(type: string): TelegramConversationType {
     return type;
   }
   return "private";
+}
+
+function buildDisplayName(user: {
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+} | null | undefined): string | null {
+  if (!user) {
+    return null;
+  }
+  const firstName = (user.first_name ?? "").trim();
+  const lastName = (user.last_name ?? "").trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  if (fullName) {
+    return fullName;
+  }
+  const username = (user.username ?? "").trim();
+  return username || null;
 }
 
 function toOptionalMessageId(messageId?: number | string): number | undefined {

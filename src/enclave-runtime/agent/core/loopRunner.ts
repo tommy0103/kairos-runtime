@@ -312,11 +312,15 @@ async function downloadImageAsBase64(url: string): Promise<string | null> {
       const filePath = url.slice(7);
       buf = await fs.readFile(filePath);
       contentType = detectImageMime(buf, null, url);
-    } else {
+    } else if (/^https?:\/\//i.test(url)) {
       const res = await fetch(url);
       if (!res.ok) return null;
       buf = Buffer.from(await res.arrayBuffer());
       contentType = detectImageMime(buf, res.headers.get("content-type"), url);
+    } else {
+      // Userbot may pass plain local paths (for example /tmp/kairos-vision/xxx.jpg).
+      buf = await fs.readFile(url);
+      contentType = detectImageMime(buf, null, url);
     }
 
     const base64 = buf.toString("base64");
@@ -342,6 +346,43 @@ function detectImageMime(buf: Buffer, headerType: string | null, url: string): s
   if (ext === "webp") return "image/webp";
 
   return "image/jpeg";
+}
+
+
+interface VisionEndpointConfig {
+  apiKey: string;
+  baseURL: string;
+  modelId: string;
+}
+
+function readEnvOverride(name: string): string | undefined {
+  const raw = process.env[name];
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const normalized = raw.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function resolveVisionEndpointConfig(options: {
+  apiKey: string;
+  baseURL: string;
+  modelId: string;
+}): VisionEndpointConfig {
+  const apiKey =
+    readEnvOverride("VISION_API_KEY") ??
+    readEnvOverride("CUSTOM_EMOJI_TO_TEXT_API_KEY") ??
+    options.apiKey;
+  const baseURL =
+    readEnvOverride("VISION_BASE_URL") ??
+    readEnvOverride("CUSTOM_EMOJI_TO_TEXT_BASE_URL") ??
+    options.baseURL;
+  const modelId =
+    readEnvOverride("VISION_MODEL") ??
+    readEnvOverride("CUSTOM_EMOJI_TO_TEXT_MODEL") ??
+    options.modelId;
+
+  return { apiKey, baseURL, modelId };
 }
 
 function injectVisionDescription(messages: AgentLoopMessage[], description: string): AgentLoopMessage[] {
@@ -407,8 +448,16 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     const { imageUrls, ...genOpts } = generateOptions;
     const model = createCompatibleModel(genOpts.model ?? options.defaultModel, options.baseURL);
     if (imageUrls?.length) {
+      const vision = resolveVisionEndpointConfig({
+        apiKey: options.apiKey,
+        baseURL: options.baseURL,
+        modelId: model.id,
+      });
       const description = await preprocessVisionContent(
-        imageUrls, options.apiKey, options.baseURL, model.id,
+        imageUrls,
+        vision.apiKey,
+        vision.baseURL,
+        vision.modelId,
       );
       if (description) {
         messages = injectVisionDescription(messages, description);

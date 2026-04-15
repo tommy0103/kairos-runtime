@@ -44,7 +44,7 @@ export interface UserBotAdapterOptions {
 
 export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAdapter {
   const client = new TelegramClient(new StringSession(options.sessionString || ""), options.apiId, options.apiHash, { connectionRetries: 10, useWSS: false, autoReconnect: true });
-  const sentMessageIds = new Set<number>();
+  const sentMessageIds = new Set<string>();
   const streams = new Map<number, StreamState>();
   let nextStreamId = 1;
   const messageHandlers = new Set<any>();
@@ -224,6 +224,35 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     } catch (e) {}
   };
 
+
+  const sentMessageKey = (chatId: number, messageId: number): string => `${chatId}:${messageId}`;
+
+  const rememberSentMessage = (chatId: number, messageId: number): void => {
+    sentMessageIds.add(sentMessageKey(chatId, messageId));
+  };
+
+  const hasSentMessage = (chatId: number, messageId: number): boolean => {
+    return sentMessageIds.has(sentMessageKey(chatId, messageId));
+  };
+
+  const buildDisplayNameFromUser = (user: Api.User): string | null => {
+    const firstName = (user.firstName || "").trim();
+    const lastName = (user.lastName || "").trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+    if (fullName) {
+      return fullName;
+    }
+    const username = (user.username || "").trim();
+    return username || null;
+  };
+
+  const buildDisplayNameFromEntity = (entity: Api.User | Api.Chat | Api.Channel): string | null => {
+    if (entity instanceof Api.User) {
+      return buildDisplayNameFromUser(entity);
+    }
+    return entity.title?.trim() || null;
+  };
+
   const downloadPhoto = async (msg: Api.Message): Promise<string | null> => {
     if (!(msg.media instanceof Api.MessageMediaPhoto)) return null;
     try {
@@ -253,15 +282,16 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
   };
 
 
-  const isReplyingToMe = async (
+  const resolveReplyTarget = async (
     chatId: number,
     replyToMsgId: number | null,
-  ): Promise<boolean> => {
+  ): Promise<{ isReplyToMe: boolean; replyToUserId: string | null }> => {
     if (!me || replyToMsgId === null) {
-      return false;
+      return { isReplyToMe: false, replyToUserId: null };
     }
-    if (sentMessageIds.has(replyToMsgId)) {
-      return true;
+
+    if (hasSentMessage(chatId, replyToMsgId)) {
+      return { isReplyToMe: true, replyToUserId: me.id.toString() };
     }
 
     try {
@@ -275,12 +305,13 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
 
       if (repliedMessage instanceof Api.Message) {
         const repliedFromId = repliedMessage.fromId;
-        if (
-          repliedFromId instanceof Api.PeerUser &&
-          repliedFromId.userId.toString() === me.id.toString()
-        ) {
-          sentMessageIds.add(replyToMsgId);
-          return true;
+        if (repliedFromId instanceof Api.PeerUser) {
+          const replyToUserId = repliedFromId.userId.toString();
+          const isReplyToMe = replyToUserId === me.id.toString();
+          if (isReplyToMe) {
+            rememberSentMessage(chatId, replyToMsgId);
+          }
+          return { isReplyToMe, replyToUserId };
         }
       }
     } catch (error) {
@@ -290,7 +321,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       );
     }
 
-    return false;
+    return { isReplyToMe: false, replyToUserId: null };
   };
   const toTelegramMessage = async (msg: Api.Message, photoCountOverride?: number, photoPaths?: string[]): Promise<TelegramMessage | null> => {
     if (!me || !msg.peerId) return null;
@@ -317,7 +348,8 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       (myUsername ? text.includes(`@${myUsername}`) : false);
 
     // Reply detection (cache + network fallback for post-restart historical replies).
-    const isReplyToMe = await isReplyingToMe(chatId, replyToMsgId);
+    const replyTarget = await resolveReplyTarget(chatId, replyToMsgId);
+    const isReplyToMe = replyTarget.isReplyToMe;
     
     // Detect bot-like sender and resolve display name.
     let isBot = false;
@@ -328,9 +360,9 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         if (sender instanceof Api.User) {
           const username = sender.username || "";
           isBot = sender.bot || username.toLowerCase().includes("bot") || false;
-          senderName = username || sender.firstName || null;
+          senderName = buildDisplayNameFromEntity(sender);
         } else if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
-          senderName = sender.title || null;
+          senderName = buildDisplayNameFromEntity(sender);
         }
       }
     } catch (e) {
@@ -380,7 +412,15 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       context: renderedContext + photoPlaceholder,
       timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
       imageUrls,
-      metadata: { isBot, username: senderName, replyToMessageId: replyToMsgId, replyToUserId: null, isReplyToMe, isMentionMe, mentions: [] }
+      metadata: {
+        isBot,
+        username: senderName,
+        replyToMessageId: replyToMsgId,
+        replyToUserId: replyTarget.replyToUserId,
+        isReplyToMe,
+        isMentionMe,
+        mentions: [],
+      }
     };
   };
 
@@ -504,7 +544,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     reply: async (chatId, text, messageId) => {
       const target = await getSafeEntity(chatId);
       const sent = await client.sendMessage(target, { message: text, replyTo: messageId });
-      if (sent instanceof Api.Message) sentMessageIds.add(sent.id);
+      if (sent instanceof Api.Message) rememberSentMessage(chatId, sent.id);
     },
     sendMediaBatch: async (chatId, items, options) => {
       const result: TelegramSendMediaBatchResult = {
@@ -541,7 +581,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
             }
             const sent = await (client as any).sendFile(target, sendOptions);
             if (sent instanceof Api.Message) {
-              sentMessageIds.add(sent.id);
+              rememberSentMessage(chatId, sent.id);
             }
             result.sentCount += 1;
             uploadSequence += 1;
@@ -575,7 +615,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         });
         if (sent instanceof Api.Message) {
           placeholderMessageId = sent.id;
-          sentMessageIds.add(sent.id);
+          rememberSentMessage(chatId, sent.id);
         }
       } catch (error) {
         console.warn("[userbot] failed to send stream placeholder:", error);
@@ -627,7 +667,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         replyTo: s.replyToMessageId || undefined,
       });
       if (sent instanceof Api.Message) {
-        sentMessageIds.add(sent.id);
+        rememberSentMessage(s.chatId, sent.id);
         console.log(`[userbot] Record sent message ID: ${sent.id}`);
       }
       streams.delete(id);
