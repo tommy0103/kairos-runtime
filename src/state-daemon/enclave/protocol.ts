@@ -6,6 +6,15 @@ export interface StreamReplyRequest {
   imageUrls?: string[];
 }
 
+export type EnclaveOutgoingMediaType = "image" | "audio" | "file";
+
+export interface EnclaveOutgoingMediaItem {
+  source: string;
+  type: EnclaveOutgoingMediaType;
+  mimeType?: string;
+  fileName?: string;
+}
+
 export type EnclaveStreamEvent =
   | {
       type: "message_update";
@@ -15,6 +24,14 @@ export type EnclaveStreamEvent =
   | {
       type: "send_message";
       delta: string;
+      toolCallId?: string;
+      awaitResponse?: boolean;
+      replyTo?: string;
+    }
+  | {
+      type: "send_file";
+      items: EnclaveOutgoingMediaItem[];
+      caption?: string;
       toolCallId?: string;
       awaitResponse?: boolean;
       replyTo?: string;

@@ -1,9 +1,11 @@
-import { Bot, type Context } from "grammy";
+import { Bot, InputFile, type Context } from "grammy";
 import type {
   StreamState,
   TelegramAdapter,
   TelegramConversationType,
   TelegramMessage,
+  TelegramOutgoingMediaItem,
+  TelegramSendMediaBatchResult,
 } from "./types";
 import { markdownToTelegramHtml } from "./markdownToHtml";
 import { createCustomEmojiToTextResolver } from "./custom-emoji-to-text";
@@ -287,6 +289,81 @@ export function createTelegramAdapter(
     }
   };
 
+  const sendMediaItem = async (
+    chatId: number,
+    item: TelegramOutgoingMediaItem,
+    options?: { caption?: string; replyToMessageId?: number }
+  ) => {
+    const mediaInput = toTelegramMediaInput(item.source, item.fileName);
+    const payload = options?.caption ? toTelegramPayload(options.caption) : null;
+    const mediaOptions: Record<string, unknown> = {};
+    if (payload?.body) {
+      mediaOptions.caption = payload.body;
+    }
+    if (payload?.parseMode) {
+      mediaOptions.parse_mode = payload.parseMode;
+    }
+    const resolvedReplyTo = toOptionalMessageId(options?.replyToMessageId);
+    if (resolvedReplyTo !== undefined) {
+      mediaOptions.reply_to_message_id = resolvedReplyTo;
+    }
+
+    if (item.type === "image") {
+      return bot.api.sendPhoto(chatId, mediaInput as any, mediaOptions as any);
+    }
+    if (item.type === "audio") {
+      return bot.api.sendAudio(chatId, mediaInput as any, mediaOptions as any);
+    }
+    return bot.api.sendDocument(chatId, mediaInput as any, mediaOptions as any);
+  };
+
+  const sendMediaBatch: TelegramAdapter["sendMediaBatch"] = async (
+    chatId,
+    items,
+    options
+  ) => {
+    const result: TelegramSendMediaBatchResult = {
+      sentCount: 0,
+      failures: [],
+    };
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return result;
+    }
+
+    const groups = splitMediaItemsByType(items);
+    let caption = options?.caption?.trim() || undefined;
+    const replyToMessageId = toOptionalMessageId(options?.replyToMessageId);
+
+    for (const group of groups) {
+      for (let index = 0; index < group.length; index += 1) {
+        const item = group[index];
+        const effectiveCaption = caption && index === 0 ? caption : undefined;
+        try {
+          const sent = await sendMediaItem(chatId, item, {
+            caption: effectiveCaption,
+            replyToMessageId,
+          });
+          const outgoing = toOutgoingTelegramMessage(sent as any);
+          if (outgoing) {
+            dispatchMessage(outgoing);
+          }
+          result.sentCount += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          result.failures.push({
+            source: item.source,
+            type: item.type,
+            error: message,
+          });
+        }
+      }
+      caption = undefined;
+    }
+
+    return result;
+  };
+
   const sendTyping: TelegramAdapter["sendTyping"] = async (chatId) => {
     await setTyping(chatId);
   };
@@ -523,6 +600,7 @@ export function createTelegramAdapter(
     onMessage,
     onEditedMessage,
     reply,
+    sendMediaBatch,
     sendTyping,
     startStream,
     setStreamStatus,
@@ -618,7 +696,7 @@ function toOutgoingTelegramMessage(
   if (!message?.chat) {
     return null;
   }
-  const context = message.text ?? "";
+  const context = (message as { text?: string; caption?: string }).text ?? (message as { caption?: string }).caption ?? "";
   return {
     userId: message.from?.id?.toString() ?? "bot",
     messageId: message.message_id,
@@ -922,4 +1000,51 @@ async function resolvePhotoUrlsByFileIds(
     }
   }
   return urls;
+}
+
+function splitMediaItemsByType(
+  items: TelegramOutgoingMediaItem[]
+): TelegramOutgoingMediaItem[][] {
+  const groups: TelegramOutgoingMediaItem[][] = [];
+  for (const item of items) {
+    if (!item?.source) {
+      continue;
+    }
+    const lastGroup = groups[groups.length - 1];
+    if (!lastGroup || lastGroup[0].type !== item.type) {
+      groups.push([item]);
+      continue;
+    }
+    lastGroup.push(item);
+  }
+  return groups;
+}
+
+function toTelegramMediaInput(source: string, fileName?: string): string | InputFile {
+  if (isHttpMediaSource(source)) {
+    return source;
+  }
+  const localPath = toLocalMediaPath(source);
+  return fileName ? new InputFile(localPath, fileName) : new InputFile(localPath);
+}
+
+function isHttpMediaSource(source: string): boolean {
+  try {
+    const parsed = new URL(source);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function toLocalMediaPath(source: string): string {
+  try {
+    const parsed = new URL(source);
+    if (parsed.protocol === "file:") {
+      return decodeURIComponent(parsed.pathname);
+    }
+    return source;
+  } catch {
+    return source;
+  }
 }

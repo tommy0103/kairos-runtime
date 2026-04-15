@@ -356,6 +356,26 @@ export function createMessageGateway(
 
     const instruction = etiquetteManager.getInstruction(socialState);
 
+    const deliverMediaBatch = async (event: Extract<RuntimeReplyStreamEvent, { type: "send_file" }>) => {
+      const replyToMessageId = event.replyToMessageId ?? message.messageId;
+      const result = await options.telegram.sendMediaBatch(
+        message.chatId,
+        event.items,
+        {
+          caption: event.caption,
+          replyToMessageId,
+        }
+      );
+
+      if (result.failures.length > 0) {
+        console.warn(
+          `[message gateway] media send had failures chatId=${message.chatId} sent=${result.sentCount} failed=${result.failures.length}`
+        );
+      }
+
+      return result;
+    };
+
     if (sendMessageMode === "compat") {
       const eta = estimateReplyEtaSeconds(message);
       const streamMessageId = await options.telegram.startStream(
@@ -387,6 +407,7 @@ export function createMessageGateway(
 
       try {
         let hasOutput = false;
+        let hasTextOutput = false;
         for await (const event of options.runtime.streamReply({
           triggerMessage: message,
           prompt: instruction,
@@ -400,24 +421,46 @@ export function createMessageGateway(
           if (event.type === "send_message") {
             const chunk = event.text.trim();
             if (chunk) {
-              const needsSpacer = hasOutput;
+              const needsSpacer = hasTextOutput;
               options.telegram.appendStream(
                 streamMessageId,
                 needsSpacer ? `\n\n${chunk}` : chunk
               );
               hasOutput = true;
+              hasTextOutput = true;
+            }
+            continue;
+          }
+          if (event.type === "send_file") {
+            const mediaResult = await deliverMediaBatch(event);
+            if (mediaResult.sentCount > 0) {
+              hasOutput = true;
+            }
+            if (mediaResult.sentCount === 0 && mediaResult.failures.length > 0) {
+              options.telegram.appendStream(
+                streamMessageId,
+                "\n(Failed to send media files in this run.)"
+              );
+              hasOutput = true;
+              hasTextOutput = true;
             }
             continue;
           }
           if (event.type === "message_delta") {
             options.telegram.appendStream(streamMessageId, event.delta);
             hasOutput = true;
+            hasTextOutput = true;
           }
         }
         if (!hasOutput) {
           options.telegram.appendStream(
             streamMessageId,
             "\n(Model returned no displayable text in this turn. Please retry.)"
+          );
+        } else if (!hasTextOutput) {
+          options.telegram.appendStream(
+            streamMessageId,
+            "\n(Media delivered.)"
           );
         }
         await options.telegram.endStream(streamMessageId);
@@ -494,6 +537,21 @@ export function createMessageGateway(
               message.chatId,
               replyChunk,
               replyToMessageId
+            );
+            sentMessagesCount += 1;
+          }
+          continue;
+        }
+        if (event.type === "send_file") {
+          const mediaResult = await deliverMediaBatch(event);
+          if (mediaResult.sentCount > 0) {
+            sentMessagesCount += 1;
+          }
+          if (mediaResult.sentCount === 0 && mediaResult.failures.length > 0) {
+            await options.telegram.reply(
+              message.chatId,
+              "Failed to send media files, please retry.",
+              event.replyToMessageId ?? message.messageId
             );
             sentMessagesCount += 1;
           }

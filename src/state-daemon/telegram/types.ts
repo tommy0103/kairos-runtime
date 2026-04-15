@@ -4,6 +4,24 @@ import type {
 } from "../types/message";
 export type { TelegramConversationType, TelegramMessage };
 
+export type TelegramOutgoingMediaType = "image" | "audio" | "file";
+
+export interface TelegramOutgoingMediaItem {
+  source: string;
+  type: TelegramOutgoingMediaType;
+  mimeType?: string;
+  fileName?: string;
+}
+
+export interface TelegramSendMediaBatchResult {
+  sentCount: number;
+  failures: Array<{
+    source: string;
+    type: TelegramOutgoingMediaType;
+    error: string;
+  }>;
+}
+
 export interface StreamState {
   chatId: number;
   placeholderMessageId: number | null;
@@ -28,6 +46,14 @@ export interface TelegramAdapter {
     handler: (message: TelegramMessage) => void | Promise<void>
   ) => () => void;
   reply: (chatId: number, text: string, messageId?: number) => Promise<void>;
+  sendMediaBatch: (
+    chatId: number,
+    items: TelegramOutgoingMediaItem[],
+    options?: {
+      caption?: string;
+      replyToMessageId?: number;
+    }
+  ) => Promise<TelegramSendMediaBatchResult>;
   sendTyping: (chatId: number) => Promise<void>;
   startStream: (
     chatId: number,

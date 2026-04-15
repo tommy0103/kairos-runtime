@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentEnclaveClient,
+  EnclaveOutgoingMediaItem,
   EnclaveStreamEvent,
   StreamReplyRequest,
 } from "./protocol";
@@ -103,6 +104,69 @@ function toMetadata(data?: Record<string, string>): grpc.Metadata | undefined {
   return metadata;
 }
 
+function parseSendFilePayload(raw: string | undefined): {
+  items: EnclaveOutgoingMediaItem[];
+  caption?: string;
+} | null {
+  if (!raw) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const payload = parsed as {
+    items?: Array<{
+      source?: unknown;
+      type?: unknown;
+      mimeType?: unknown;
+      fileName?: unknown;
+    }>;
+    caption?: unknown;
+  };
+
+  if (!Array.isArray(payload.items) || payload.items.length === 0) {
+    return null;
+  }
+
+  const items: EnclaveOutgoingMediaItem[] = [];
+  for (const item of payload.items) {
+    const source = typeof item?.source === "string" ? item.source.trim() : "";
+    const type = item?.type;
+    if (!source) {
+      continue;
+    }
+    if (type !== "image" && type !== "audio" && type !== "file") {
+      continue;
+    }
+    const mimeType =
+      typeof item?.mimeType === "string" && item.mimeType.trim()
+        ? item.mimeType.trim()
+        : undefined;
+    const fileName =
+      typeof item?.fileName === "string" && item.fileName.trim()
+        ? item.fileName.trim()
+        : undefined;
+
+    items.push({ source, type, mimeType, fileName });
+  }
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  const caption =
+    typeof payload.caption === "string" && payload.caption.trim()
+      ? payload.caption.trim()
+      : undefined;
+
+  return { items, caption };
+}
+
 function mapGrpcEvent(event: GrpcStreamReplyEvent): EnclaveStreamEvent {
   const type = event.type ?? "";
   if (type === "message_update") {
@@ -116,6 +180,23 @@ function mapGrpcEvent(event: GrpcStreamReplyEvent): EnclaveStreamEvent {
     return {
       type: "send_message",
       delta: event.delta ?? "",
+      toolCallId: event.tool_call_id,
+      awaitResponse: event.await_response ?? false,
+      replyTo: event.reply_to,
+    };
+  }
+  if (type === "send_file") {
+    const payload = parseSendFilePayload(event.result_json);
+    if (!payload) {
+      return {
+        type: "failed",
+        error: "Invalid send_file payload from enclave runtime.",
+      };
+    }
+    return {
+      type: "send_file",
+      items: payload.items,
+      caption: payload.caption,
       toolCallId: event.tool_call_id,
       awaitResponse: event.await_response ?? false,
       replyTo: event.reply_to,

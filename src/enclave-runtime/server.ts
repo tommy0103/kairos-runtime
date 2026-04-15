@@ -13,6 +13,7 @@ import {
   createReadFileSafeTool,
   createRunSafeBashTool,
   createSendMessageTool,
+  createSendFileTool,
   createWriteFileSafeTool,
 } from "./agent/tools";
 
@@ -57,6 +58,7 @@ const toolFactories: Record<string, () => any> = {
   write_file_safe: createWriteFileSafeTool,
   list_files_safe: createListFilesSafeTool,
   send_message: createSendMessageTool,
+  send_file: createSendFileTool,
 };
 
 function parseEnabledToolNames(): Set<string> {
@@ -73,6 +75,7 @@ function parseEnabledToolNames(): Set<string> {
     .filter((item) => item.length > 0);
   const enabled = new Set(names);
   enabled.add("send_message");
+  enabled.add("send_file");
   return enabled;
 }
 
@@ -225,6 +228,18 @@ function toGrpcEvent(event: AgentLoopStreamEvent): GrpcStreamReplyEvent {
       tool_call_id: event.toolCallId,
       await_response: event.awaitResponse ?? false,
       reply_to: event.replyTo,
+    };
+  }
+  if (event.type === "send_file") {
+    return {
+      type: "send_file",
+      tool_call_id: event.toolCallId,
+      await_response: event.awaitResponse ?? false,
+      reply_to: event.replyTo,
+      result_json: safeSerializeResult({
+        items: event.items,
+        caption: event.caption,
+      }),
     };
   }
   if (event.type === "tool_execution_start") {

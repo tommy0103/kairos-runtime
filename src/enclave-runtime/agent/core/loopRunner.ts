@@ -45,6 +45,19 @@ export type AgentLoopStreamEvent =
       replyTo?: string;
     }
   | {
+      type: "send_file";
+      items: Array<{
+        source: string;
+        type: "image" | "audio" | "file";
+        mimeType?: string;
+        fileName?: string;
+      }>;
+      caption?: string;
+      toolCallId?: string;
+      awaitResponse?: boolean;
+      replyTo?: string;
+    }
+  | {
       type: "tool_execution_start";
       toolName: string;
       toolCallId?: string;
@@ -156,6 +169,20 @@ interface SendMessageToolResult {
   };
 }
 
+interface SendFileToolResult {
+  details?: {
+    items?: Array<{
+      source?: string;
+      type?: string;
+      mimeType?: string;
+      fileName?: string;
+    }>;
+    caption?: string;
+    awaitResponse?: boolean;
+    replyTo?: string;
+  };
+}
+
 interface AgentEndMessage {
   role?: string;
   content?: Array<{ type?: string; text?: string }>;
@@ -207,6 +234,69 @@ function extractSendMessagePayload(result: unknown): {
   return {
     text,
     awaitResponse: details?.awaitResponse === true,
+    replyTo,
+  };
+}
+
+function extractSendFilePayload(result: unknown): {
+  items: Array<{
+    source: string;
+    type: "image" | "audio" | "file";
+    mimeType?: string;
+    fileName?: string;
+  }>;
+  caption?: string;
+  awaitResponse: boolean;
+  replyTo?: string;
+} | null {
+  const details = (result as SendFileToolResult | undefined)?.details;
+  if (!Array.isArray(details?.items) || details.items.length === 0) {
+    return null;
+  }
+
+  const items: Array<{
+    source: string;
+    type: "image" | "audio" | "file";
+    mimeType?: string;
+    fileName?: string;
+  }> = [];
+
+  for (const item of details.items) {
+    const source = typeof item?.source === "string" ? item.source.trim() : "";
+    const type = item?.type;
+    if (!source) {
+      continue;
+    }
+    if (type !== "image" && type !== "audio" && type !== "file") {
+      continue;
+    }
+    items.push({
+      source,
+      type,
+      mimeType: typeof item?.mimeType === "string" && item.mimeType.trim()
+        ? item.mimeType.trim()
+        : undefined,
+      fileName: typeof item?.fileName === "string" && item.fileName.trim()
+        ? item.fileName.trim()
+        : undefined,
+    });
+  }
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  const caption = typeof details.caption === "string" && details.caption.trim()
+    ? details.caption.trim()
+    : undefined;
+  const replyTo = typeof details.replyTo === "string" && details.replyTo.trim()
+    ? details.replyTo.trim()
+    : undefined;
+
+  return {
+    items,
+    caption,
+    awaitResponse: details.awaitResponse === true,
     replyTo,
   };
 }
@@ -475,6 +565,20 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
               yield {
                 type: "send_message",
                 delta: payload.text,
+                toolCallId: event.toolCallId,
+                awaitResponse: payload.awaitResponse,
+                replyTo: payload.replyTo,
+              };
+            }
+          } else if (event.toolName === "send_file") {
+            const payload = extractSendFilePayload(event.result);
+            if (payload) {
+              messageSentViaTool = true;
+              globalMessageHasEmitted = true;
+              yield {
+                type: "send_file",
+                items: payload.items,
+                caption: payload.caption,
                 toolCallId: event.toolCallId,
                 awaitResponse: payload.awaitResponse,
                 replyTo: payload.replyTo,

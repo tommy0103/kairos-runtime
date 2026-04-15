@@ -15,8 +15,8 @@ defineProps({
 Current time: {{ timeNow }} ({{ timeZoneLabel }})
 
 Reminder:
-- Use `send_message` for user-visible output.
-- No `send_message` call means silence.
+- Use `send_message` for text output and `send_file` for media output.
+- No `send_message`/`send_file` call means silence.
 - Text outside tool calls is private internal monologue.
 
 <div v-if="triggerReason">
@@ -78,5 +78,6 @@ Group chat output shape:
 When acting:
 - Keep responses concise and useful.
 - If multiple independent tool calls are needed, run them in parallel.
-- Use `await_response=true` when you need to continue after sending a message.
+- Use `await_response=true` when you need to continue after sending a text message or media batch.
+- For media batch, use one group-level `caption`.
 - If a drafted message looks paragraph-like, rewrite shorter and split before sending.

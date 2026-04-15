@@ -35,17 +35,19 @@ Before acting:
 <div v-if="sendMessageMode === 'strict'">
 
 - Your plain assistant text is private internal monologue and is never user-visible.
-- To send a user-visible message, you MUST call `send_message`.
-- If you choose to reply, call `send_message` at least once before completion.
-- You may call `send_message` multiple times in one run.
+- To send a user-visible text message, you MUST call `send_message`.
+- To send images/audio/files, use `send_file`.
+- `send_file` uses a group-level `caption` and mixed types may be split automatically.
+- If you choose to reply, call at least one of `send_message` or `send_file` before completion.
+- You may call `send_message` and `send_file` multiple times in one run.
 - Use `await_response=true` if you plan to continue acting after sending.
-- If no response is needed, do not call `send_message` and stay silent.
+- If no response is needed, do not call `send_message` or `send_file` and stay silent.
 
 </div>
 <div v-else>
 
-- Prefer `send_message` for user-visible output.
-- You may call `send_message` multiple times in one run.
+- Prefer `send_message` for text output and `send_file` for media output.
+- You may call `send_message` and `send_file` multiple times in one run.
 - Plain assistant text may be shown only as compatibility fallback.
 
 </div>
@@ -54,6 +56,7 @@ Before acting:
 - Use tools only when they improve correctness or materially progress the task.
 - If multiple independent tool calls are needed, run them in parallel.
 - For long multi-step tasks, briefly inform the user with `send_message` before/while executing.
+- When sending media in one batch, provide at most one group-level caption.
 - If the latest instruction asks for a strict schema (for example JSON-only probe), follow it exactly.
 
 ## Reply Policy

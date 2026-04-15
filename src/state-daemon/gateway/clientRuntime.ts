@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { inspect } from "node:util";
 import type { LLMMessage, TelegramMessage } from "../types/message";
 import { RemoteAsyncIterable } from "../types/remoteAsyncIterable";
-import type { AgentEnclaveClient } from "../enclave/protocol";
+import type { AgentEnclaveClient, EnclaveOutgoingMediaItem } from "../enclave/protocol";
 import {
   buildSystemPromptInput,
   createContextAssembler,
@@ -33,6 +33,13 @@ export type RuntimeReplyStreamEvent =
   | {
       type: "send_message";
       text: string;
+      replyToMessageId?: number;
+      awaitResponse?: boolean;
+    }
+  | {
+      type: "send_file";
+      items: EnclaveOutgoingMediaItem[];
+      caption?: string;
       replyToMessageId?: number;
       awaitResponse?: boolean;
     }
@@ -98,6 +105,8 @@ function statusTextForToolStart(toolName: string): string {
   switch (toolName) {
     case "send_message":
       return "Sending message...";
+    case "send_file":
+      return "Sending media files...";
     case "fetch_webpage":
       return "Checking web sources...";
     case "read_file_safe":
@@ -121,6 +130,8 @@ function statusTextForToolEnd(toolName: string): string {
   switch (toolName) {
     case "send_message":
       return "Message sent.";
+    case "send_file":
+      return "Media files sent.";
     case "fetch_webpage":
       return "Web lookup complete, continuing generation...";
     case "read_file_safe":
@@ -416,6 +427,21 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
             stream.push({
               type: "send_message",
               text: event.delta,
+              replyToMessageId: parseReplyToMessageId(event.replyTo),
+              awaitResponse: event.awaitResponse,
+            });
+            continue;
+          }
+          if (event.type === "send_file") {
+            stream.push({
+              type: "status_update",
+              stage: "sending",
+              text: "Sending media files...",
+            });
+            stream.push({
+              type: "send_file",
+              items: event.items,
+              caption: event.caption,
               replyToMessageId: parseReplyToMessageId(event.replyTo),
               awaitResponse: event.awaitResponse,
             });
