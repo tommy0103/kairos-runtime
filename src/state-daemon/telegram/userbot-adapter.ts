@@ -1,6 +1,7 @@
 import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { NewMessage } from "telegram/events";
+import { CustomFile } from "telegram/client/uploads";
 import type {
   TelegramAdapter,
   TelegramMessage,
@@ -9,6 +10,7 @@ import type {
   TelegramSendMediaBatchResult,
 } from "./types";
 import fs from "node:fs/promises";
+import { basename, extname } from "node:path";
 import { createCustomEmojiToTextResolver } from "./custom-emoji-to-text";
 import { createImageAltTextStore } from "./image-to-text-store";
 import type { CustomEmojiToTextConfig } from "./index";
@@ -518,13 +520,14 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       const groups = splitMediaItemsByType(items);
       let caption = options?.caption?.trim() || undefined;
       const replyTo = options?.replyToMessageId || undefined;
+      let uploadSequence = 1;
 
       for (const group of groups) {
         for (let index = 0; index < group.length; index += 1) {
           const item = group[index];
           const effectiveCaption = caption && index === 0 ? caption : undefined;
           try {
-            const fileInput = await resolveUserbotMediaInput(item.source);
+            const fileInput = await resolveUserbotMediaInput(item, uploadSequence);
             const sendOptions: Record<string, unknown> = {
               file: fileInput,
               caption: effectiveCaption,
@@ -541,6 +544,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
               sentMessageIds.add(sent.id);
             }
             result.sentCount += 1;
+            uploadSequence += 1;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             result.failures.push({
@@ -752,15 +756,25 @@ function splitMediaItemsByType(
   return groups;
 }
 
-async function resolveUserbotMediaInput(source: string): Promise<Buffer | string> {
-  if (isHttpMediaSource(source)) {
-    const response = await fetch(source);
+async function resolveUserbotMediaInput(
+  item: TelegramOutgoingMediaItem,
+  sequence: number
+): Promise<CustomFile> {
+  if (isHttpMediaSource(item.source)) {
+    const response = await fetch(item.source);
     if (!response.ok) {
       throw new Error(`download media failed (${response.status})`);
     }
-    return Buffer.from(await response.arrayBuffer());
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const responseMimeType = normalizeMimeType(response.headers.get("content-type") ?? undefined);
+    const fileName = buildOutgoingFileName(item, sequence, responseMimeType);
+    return new CustomFile(fileName, buffer.length, "", buffer);
   }
-  return toLocalMediaPath(source);
+
+  const localPath = toLocalMediaPath(item.source);
+  const stat = await fs.stat(localPath);
+  const fileName = buildOutgoingFileName(item, sequence);
+  return new CustomFile(fileName, stat.size, localPath);
 }
 
 function isHttpMediaSource(source: string): boolean {
@@ -782,4 +796,108 @@ function toLocalMediaPath(source: string): string {
   } catch {
     return source;
   }
+}
+
+function buildOutgoingFileName(
+  item: TelegramOutgoingMediaItem,
+  sequence: number,
+  responseMimeType?: string
+): string {
+  const itemMimeType = normalizeMimeType(item.mimeType);
+  const resolvedMimeType = itemMimeType || responseMimeType;
+  const inferredExtension =
+    inferExtensionFromMimeType(resolvedMimeType) || defaultExtensionForType(item.type);
+
+  const explicitName = sanitizeFileName(item.fileName ?? "");
+  if (explicitName) {
+    if (extname(explicitName).trim()) {
+      return explicitName;
+    }
+    return `${explicitName}${inferredExtension}`;
+  }
+
+  const sourceName = sanitizeFileName(extractSourceFileName(item.source));
+  if (sourceName) {
+    if (extname(sourceName).trim()) {
+      return sourceName;
+    }
+    return `${sourceName}${inferredExtension}`;
+  }
+
+  return `${item.type}-${Date.now()}-${sequence}${inferredExtension}`;
+}
+
+function sanitizeFileName(name: string): string {
+  const sanitized = name.trim().replaceAll("\\", "_").replaceAll("/", "_");
+  return sanitized.slice(0, 200);
+}
+
+function extractSourceFileName(source: string): string {
+  if (isHttpMediaSource(source)) {
+    try {
+      const parsed = new URL(source);
+      return basename(decodeURIComponent(parsed.pathname));
+    } catch {
+      return "";
+    }
+  }
+  const localPath = toLocalMediaPath(source);
+  return basename(localPath);
+}
+
+function normalizeMimeType(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.toLowerCase().split(";")[0]?.trim();
+  return normalized || undefined;
+}
+
+function inferExtensionFromMimeType(mimeType?: string): string | undefined {
+  if (!mimeType || mimeType === "application/octet-stream") {
+    return undefined;
+  }
+  switch (mimeType) {
+    case "image/jpeg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    case "audio/mpeg":
+      return ".mp3";
+    case "audio/mp4":
+    case "audio/x-m4a":
+      return ".m4a";
+    case "audio/wav":
+    case "audio/x-wav":
+      return ".wav";
+    case "audio/ogg":
+      return ".ogg";
+    case "audio/flac":
+      return ".flac";
+    default: {
+      const slashIndex = mimeType.indexOf("/");
+      if (slashIndex <= 0 || slashIndex === mimeType.length - 1) {
+        return undefined;
+      }
+      const subtype = mimeType.slice(slashIndex + 1).split("+")[0]?.trim();
+      if (!subtype || !/^[a-z0-9.-]+$/.test(subtype)) {
+        return undefined;
+      }
+      return `.${subtype}`;
+    }
+  }
+}
+
+function defaultExtensionForType(type: TelegramOutgoingMediaItem["type"]): string {
+  if (type === "image") {
+    return ".jpg";
+  }
+  if (type === "audio") {
+    return ".mp3";
+  }
+  return ".bin";
 }
