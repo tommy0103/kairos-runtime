@@ -111,7 +111,7 @@ export interface MessageGateway {
 const DEFAULT_LONG_WAIT_HINT_DELAY_MS = 120000;
 const TYPING_REFRESH_MS = 4000;
 const DEFAULT_SEND_MESSAGE_MODE = "strict";
-const DEFAULT_GROUP_REPLY_SOFT_LIMIT = 60;
+const DEFAULT_GROUP_REPLY_SOFT_LIMIT = 400;
 type SendMessageMode = "strict" | "compat";
 
 function resolveSendMessageMode(): SendMessageMode {
@@ -144,7 +144,7 @@ function resolveGroupReplySoftLimit(): number {
   if (!Number.isFinite(parsed)) {
     return DEFAULT_GROUP_REPLY_SOFT_LIMIT;
   }
-  return Math.min(200, Math.max(20, parsed));
+  return Math.min(4000, Math.max(20, parsed));
 }
 
 function isGroupConversationType(conversationType: TelegramMessage["conversationType"]): boolean {
@@ -156,6 +156,13 @@ function splitGroupReplyText(text: string, softLimit: number): string[] {
   if (!trimmed) {
     return [];
   }
+
+  // If the message contains code blocks, do not split it at all.
+  // We trust the model's decision to keep it as a single coherent unit.
+  if (trimmed.includes("```")) {
+    return [trimmed];
+  }
+
   if (trimmed.length <= softLimit) {
     return [trimmed];
   }
