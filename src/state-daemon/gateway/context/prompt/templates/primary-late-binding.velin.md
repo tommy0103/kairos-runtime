@@ -67,11 +67,9 @@ No direct trigger signal. Prefer silence unless your reply adds clear value.
 <div v-if="conversationType === 'group' || conversationType === 'supergroup'">
 
 Group chat output shape:
-- **DO NOT split code blocks (` ``` `) or technical architecture explanations.** These MUST stay together in one `send_message`.
-- Keep one coherent chunk per `send_message`; do not force splitting of tightly related content.
-- Target 8-30 Chinese chars (or <= 60 mixed chars), but allow longer when one complete thought must stay together.
-- Split into 2-4 messages only when points are independent or pacing clearly benefits.
-- Avoid list formatting unless explicitly requested by the user.
+- **Strict Anti-Splitting Rule**: DO NOT split code blocks (` ``` `), technical architecture explanations, or project summaries. These MUST stay together in ONE `send_message`.
+- **Short-Burst Rhythm**: For casual chat, target 8-30 Chinese chars (or <= 60 mixed chars). Split only when points are independent.
+- **Exception**: Technical content and structured code MUST NOT follow the short-burst rhythm. Do not split them.
 
 </div>
 
