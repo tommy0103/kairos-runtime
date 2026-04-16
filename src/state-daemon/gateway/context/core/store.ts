@@ -49,6 +49,12 @@ const SESSION_LRU_EXPIRE_MS = 1 * 60 * 1000;
 const TOPIC_SUMMARY_CONCAT_MAX = 3;
 const TOPIC_SUMMARY_CLOUD_BATCH = 5;
 const IMPOSSIBLE_SIMILARITY_SCORE_THRESHOLD = 0.35;
+const PRONOUN_REFERENCE_WINDOW_MESSAGES = 8;
+const USERNAME_ALIAS_TTL_MS = 12 * 60 * 60 * 1000;
+const TARGET_SPEAKER_SEMANTIC_THRESHOLD = 0.66;
+const SELF_SPEAKER_SEMANTIC_THRESHOLD = 0.68;
+const GROUP_SEMANTIC_THRESHOLD = 0.74;
+const RECALL_RESULT_LIMIT = 6;
 
 export function createInMemoryContextStore(
   options: CreateInMemoryContextStoreOptions = {}
@@ -70,6 +76,7 @@ export function createInMemoryContextStore(
   const cloudModel = options.cloudModel;
   const archiverService = createArchiverService({ cloudModel });
   const contextSearcher = createContextSearcher();
+  const recallDebugEnabled = parseBooleanEnv(process.env.STATE_DAEMON_RECALL_DEBUG);
 
   return {
     ingestMessage: async ({ message }) => {
@@ -79,6 +86,7 @@ export function createInMemoryContextStore(
       const messageId = message.messageId;
       const isShortMessage = message.context.length <= SHORT_MESSAGE_LENGTH;
       const ccb = getOrCreateChatControlBlock(chatControlBlocks, chatId);
+      refreshUsernameAlias(ccb, message, now);
       void downgradeExpiredSessions(ccb, now, SESSION_LRU_EXPIRE_MS, archiverService);
       const existing = ccb.messageNodes.get(messageId);
       if (existing) {
@@ -159,18 +167,70 @@ export function createInMemoryContextStore(
               messageId: message.metadata.replyToMessageId,
             });
             if (searchExactResult) {
-              targetSession = recallSession(ccb, searchExactResult, now);
+              const recalledSession = recallSession(ccb, searchExactResult, now);
+              if (recalledSession) {
+                targetSession = recalledSession;
+              }
             }
           }
           if (!targetSession) {
-            const searchSemanticResults = await contextSearcher.searchSemantic({
-              chatId,
-              query: message.context,
-              limit: 1,
-            });
-            const mostSimilarResult = searchSemanticResults[0];
-            if (mostSimilarResult && mostSimilarResult.score >= similarityThreshold) {
-              targetSession = recallSession(ccb, mostSimilarResult, now);
+            const semanticResolution = resolveRecallTargetSpeakerIds(ccb, message, now);
+            const targetScopedResults = filterSearchResultsByScore(
+              await contextSearcher.searchSemantic({
+                chatId,
+                query: message.context,
+                limit: RECALL_RESULT_LIMIT,
+                targetSpeakerIds: semanticResolution.targetSpeakerIds,
+              }),
+              TARGET_SPEAKER_SEMANTIC_THRESHOLD,
+            );
+
+            let semanticResults = targetScopedResults;
+            let recallStage: "target" | "self" | "group" | "none" = semanticResults.length > 0 ? "target" : "none";
+
+            if (semanticResults.length === 0 && !semanticResolution.targetSpeakerIds.includes(message.userId)) {
+              const selfScopedResults = filterSearchResultsByScore(
+                await contextSearcher.searchSemantic({
+                  chatId,
+                  query: message.context,
+                  limit: RECALL_RESULT_LIMIT,
+                  targetSpeakerIds: [message.userId],
+                }),
+                SELF_SPEAKER_SEMANTIC_THRESHOLD,
+              );
+              if (selfScopedResults.length > 0) {
+                semanticResults = selfScopedResults;
+                recallStage = "self";
+              }
+            }
+
+            if (semanticResults.length === 0) {
+              const groupScopedResults = filterSearchResultsByScore(
+                await contextSearcher.searchSemantic({
+                  chatId,
+                  query: message.context,
+                  limit: RECALL_RESULT_LIMIT,
+                }),
+                GROUP_SEMANTIC_THRESHOLD,
+              );
+              if (groupScopedResults.length > 0) {
+                semanticResults = groupScopedResults;
+                recallStage = "group";
+              }
+            }
+
+            if (recallDebugEnabled) {
+              console.log(
+                `[recall] chat=${chatId} messageId=${message.messageId} reason=${semanticResolution.reason} targets=${semanticResolution.targetSpeakerIds.join(",") || "-"} stage=${recallStage} count=${semanticResults.length} topScore=${semanticResults[0]?.score ?? 0}`,
+              );
+            }
+
+            const mostSimilarResult = semanticResults[0];
+            if (mostSimilarResult) {
+              const recalledSession = recallSession(ccb, mostSimilarResult, now);
+              if (recalledSession) {
+                targetSession = recalledSession;
+              }
             }
           }
         } catch (error) {
@@ -320,11 +380,157 @@ function getOrCreateChatControlBlock(
     chatId,
     sessionControlBlocks: new Map<string, SessionControlBlock>(),
     messageNodes: new Map<number, MessageNode>(),
+    usernameHandleToUserId: new Map<string, { userId: string; expiresAt: number }>(),
     lastMessageNodeId: null,
     nextSessionSeq: 1,
   };
   chatControlBlocks.set(chatId, next);
   return next;
+}
+
+function parseBooleanEnv(value: string | undefined): boolean {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function normalizeUsernameHandle(value: string | null | undefined): string | null {
+  const raw = (value ?? "").trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  return raw.startsWith("@") ? raw : `@${raw}`;
+}
+
+function pruneExpiredUsernameAliases(ccb: ChatControlBlock, now: number): void {
+  for (const [handle, binding] of ccb.usernameHandleToUserId.entries()) {
+    if (binding.expiresAt > now) {
+      continue;
+    }
+    ccb.usernameHandleToUserId.delete(handle);
+  }
+}
+
+function refreshUsernameAlias(ccb: ChatControlBlock, message: TelegramMessage, now: number): void {
+  pruneExpiredUsernameAliases(ccb, now);
+  const handle = normalizeUsernameHandle(message.metadata.usernameHandle);
+  if (!handle) {
+    return;
+  }
+  ccb.usernameHandleToUserId.set(handle, {
+    userId: message.userId,
+    expiresAt: now + USERNAME_ALIAS_TTL_MS,
+  });
+}
+
+function resolveUserIdByUsernameHandle(
+  ccb: ChatControlBlock,
+  handle: string,
+  now: number,
+): string | null {
+  pruneExpiredUsernameAliases(ccb, now);
+  const normalized = normalizeUsernameHandle(handle);
+  if (!normalized) {
+    return null;
+  }
+  const binding = ccb.usernameHandleToUserId.get(normalized);
+  if (!binding) {
+    return null;
+  }
+  if (binding.expiresAt <= now) {
+    ccb.usernameHandleToUserId.delete(normalized);
+    return null;
+  }
+  return binding.userId;
+}
+
+function collectExplicitRecallSpeakerIds(
+  ccb: ChatControlBlock,
+  message: TelegramMessage,
+  now: number,
+): string[] {
+  const out: string[] = [];
+  const push = (value: string | null | undefined) => {
+    const normalized = (value ?? "").trim();
+    if (!normalized || out.includes(normalized)) {
+      return;
+    }
+    out.push(normalized);
+  };
+
+  push(message.metadata.replyToUserId);
+  for (const mentionUserId of message.metadata.mentionUserIds ?? []) {
+    push(mentionUserId);
+  }
+  for (const mentionHandle of message.metadata.mentions ?? []) {
+    push(resolveUserIdByUsernameHandle(ccb, mentionHandle, now));
+  }
+  return out;
+}
+
+function hasPronounReference(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /(^|[^\w])(he|she|him|her|this person|that person|that guy|that girl)([^\w]|$)/i.test(normalized) ||
+    /(他|她|这个人|那个人)/.test(text)
+  );
+}
+
+function inferTargetSpeakerIdFromPronoun(
+  ccb: ChatControlBlock,
+  message: TelegramMessage,
+  now: number,
+): string | null {
+  if (!hasPronounReference(message.context)) {
+    return null;
+  }
+  const candidates = Array.from(ccb.messageNodes.values())
+    .filter((node) => node.messageId !== message.messageId)
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, PRONOUN_REFERENCE_WINDOW_MESSAGES);
+  for (const node of candidates) {
+    const explicitTargets = collectExplicitRecallSpeakerIds(ccb, node.message, now);
+    if (explicitTargets.length > 0) {
+      return explicitTargets[explicitTargets.length - 1] ?? null;
+    }
+  }
+  return null;
+}
+
+function resolveRecallTargetSpeakerIds(
+  ccb: ChatControlBlock,
+  message: TelegramMessage,
+  now: number,
+): { targetSpeakerIds: string[]; reason: "explicit" | "pronoun" | "self" } {
+  const explicitTargets = collectExplicitRecallSpeakerIds(ccb, message, now);
+  if (explicitTargets.length > 0) {
+    return {
+      targetSpeakerIds: explicitTargets,
+      reason: "explicit",
+    };
+  }
+
+  const inferred = inferTargetSpeakerIdFromPronoun(ccb, message, now);
+  if (inferred) {
+    return {
+      targetSpeakerIds: [inferred],
+      reason: "pronoun",
+    };
+  }
+
+  return {
+    targetSpeakerIds: [message.userId],
+    reason: "self",
+  };
+}
+
+function filterSearchResultsByScore(results: SearchResult[], minScore: number): SearchResult[] {
+  return results
+    .filter((item) => item.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, RECALL_RESULT_LIMIT);
 }
 
 function buildEmbeddingTextWithGhostContext(
@@ -600,12 +806,20 @@ function createSession(
 }
 
 function createSessionFromSearchResult(searchResult: SearchResult, now: number): SessionControlBlock {
+  const inferredCenter =
+    searchResult.centerVector.length > 0
+      ? searchResult.centerVector.slice()
+      : searchResult.messages.find((message) => message.vector.length > 0)?.vector.slice() ?? [];
+  const sessionId =
+    searchResult.sessionId.trim().length > 0
+      ? searchResult.sessionId
+      : buildRecoveredSessionId(searchResult, now);
   return {
-    sessionId: searchResult.sessionId,
-    topicSummary: searchResult.abstractSummary,
+    sessionId,
+    topicSummary: searchResult.abstractSummary || "(recalled)",
     lastSummarizedMessageCount: 0,
-    centerVector: searchResult.centerVector.slice(),
-    recentVector: searchResult.centerVector.slice(),
+    centerVector: inferredCenter.slice(),
+    recentVector: inferredCenter.length > 0 ? inferredCenter.slice() : null,
     messageIds: new Set<number>(),
     rootMessageIds: new Set(),
     status: "L1_ACTIVE",
@@ -613,15 +827,22 @@ function createSessionFromSearchResult(searchResult: SearchResult, now: number):
   };
 }
 
-function recallSession(ccb: ChatControlBlock, searchResult: SearchResult, now: number) {
+function buildRecoveredSessionId(searchResult: SearchResult, now: number): string {
+  const firstMessage = searchResult.messages[0];
+  const chatId = firstMessage?.chatId ?? "unknown";
+  const messageId = firstMessage?.messageId ?? String(Math.trunc(now));
+  return `recalled:${chatId}:${messageId}`;
+}
+
+function recallSession(ccb: ChatControlBlock, searchResult: SearchResult, now: number): SessionControlBlock | null {
   const session = createSessionFromSearchResult(searchResult, now);
-  ccb.sessionControlBlocks.set(session.sessionId, session);
   const recalledNodes: MessageNode[] = [];
   for (const storedMessage of searchResult.messages) {
     const recalledMessage = toTelegramMessage(storedMessage);
     if (!recalledMessage) {
       continue;
     }
+    const fallbackVector = storedMessage.vector.length > 0 ? storedMessage.vector.slice() : session.centerVector.slice();
     const recalledNode: MessageNode = {
       message: recalledMessage,
       messageId: recalledMessage.messageId,
@@ -629,14 +850,21 @@ function recallSession(ccb: ChatControlBlock, searchResult: SearchResult, now: n
       replyToId: recalledMessage.metadata.replyToMessageId,
       childrenIds: [],
       sessionId: session.sessionId,
-      vector: storedMessage.vector.length > 0 ? storedMessage.vector.slice() : session.centerVector.slice(),
+      vector: fallbackVector,
     };
     recalledNodes.push(recalledNode);
   }
+
+  if (recalledNodes.length === 0 && session.centerVector.length === 0) {
+    return null;
+  }
+
+  ccb.sessionControlBlocks.set(session.sessionId, session);
   recalledNodes.sort((a, b) => a.timestamp - b.timestamp);
   for (const recalledNode of recalledNodes) {
     ccb.messageNodes.set(recalledNode.messageId, recalledNode);
     session.messageIds.add(recalledNode.messageId);
+    refreshUsernameAlias(ccb, recalledNode.message, recalledNode.timestamp);
   }
   for (const recalledNode of recalledNodes) {
     const parentId = recalledNode.replyToId;
@@ -672,6 +900,12 @@ function toTelegramMessage(stored: SearchResult["messages"][number]): TelegramMe
       ? rawConversationType
       : "supergroup";
   const metadata = stored.metadata;
+  const metadataExt = metadata as
+    | (typeof metadata & {
+        mentionUserIds?: string[];
+        usernameHandle?: string;
+      })
+    | undefined;
   const replyToMessageIdRaw = metadata?.replyToMessageId ?? "";
   const replyToMessageIdNum = Number(replyToMessageIdRaw);
   const replyToMessageId = Number.isFinite(replyToMessageIdNum) ? replyToMessageIdNum : null;
@@ -690,6 +924,8 @@ function toTelegramMessage(stored: SearchResult["messages"][number]): TelegramMe
       isReplyToMe: metadata?.isReplyToMe ?? false,
       isMentionMe: metadata?.isMentionMe ?? false,
       mentions: metadata?.mentions ?? [],
+      mentionUserIds: metadataExt?.mentionUserIds ?? [],
+      usernameHandle: metadataExt?.usernameHandle ?? null,
     },
   };
 }
@@ -705,14 +941,9 @@ function setSessionActive(ccb: ChatControlBlock, activeSessionId: string): void 
 }
 
 function updateCenterVector(previous: number[], current: number[], alphaCenter: number): number[] {
-    // const n = Math.max(previous.length, current.length);
-    // const next = new Array<number>(n);
-    // for (let i = 0; i < n; i += 1) {
-    //   const prev = previous[i] ?? 0;
-    //   const curr = current[i] ?? 0;
-    //   next[i] = alphaCenter * curr + (1 - alphaCenter) * prev;
-    // }
-    // return next;
+    if (previous.length === 0 || previous.length !== current.length) {
+      return current.slice();
+    }
     return previous.map((p, i) => alphaCenter * current[i] + (1 - alphaCenter) * p);
 }
 

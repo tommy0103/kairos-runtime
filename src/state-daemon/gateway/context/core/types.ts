@@ -30,6 +30,7 @@ export interface ChatControlBlock {
   chatId: number;
   sessionControlBlocks: Map<string, SessionControlBlock>;
   messageNodes: Map<number, MessageNode>;
+  usernameHandleToUserId: Map<string, { userId: string; expiresAt: number }>;
   lastMessageNodeId: number | null;
   nextSessionSeq: number;
 }

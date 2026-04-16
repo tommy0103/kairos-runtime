@@ -25,5 +25,7 @@ export interface TelegramMessage {
     isReplyToMe: boolean;
     isMentionMe: boolean;
     mentions: string[];
+    mentionUserIds?: string[];
+    usernameHandle?: string | null;
   };
 }

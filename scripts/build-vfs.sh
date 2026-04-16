@@ -80,13 +80,22 @@ else
 fi
 
 if [[ "$MODE" == "debug" ]]; then
-  SOURCE_BIN="$TARGET_DIR/debug/memory-vfs"
+  TARGET_PROFILE_DIR="$TARGET_DIR/debug"
 else
-  SOURCE_BIN="$TARGET_DIR/release/memory-vfs"
+  TARGET_PROFILE_DIR="$TARGET_DIR/release"
 fi
 
-if [[ ! -x "$SOURCE_BIN" ]]; then
-  echo "[build-vfs] binary not found: $SOURCE_BIN" >&2
+SOURCE_BIN=""
+for candidate in memory-vfs logos-kernel logos-vfs; do
+  candidate_path="$TARGET_PROFILE_DIR/$candidate"
+  if [[ -x "$candidate_path" ]]; then
+    SOURCE_BIN="$candidate_path"
+    break
+  fi
+done
+
+if [[ -z "$SOURCE_BIN" ]]; then
+  echo "[build-vfs] binary not found in $TARGET_PROFILE_DIR (tried: memory-vfs, logos-kernel, logos-vfs)" >&2
   exit 1
 fi
 

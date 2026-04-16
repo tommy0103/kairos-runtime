@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+        #!/usr/bin/env bash
 set -euo pipefail
 
 MODE="debug"
@@ -31,7 +31,7 @@ Environment passthrough (optional):
   SANDBOX_PROCESS_ARGS
   SANDBOX_CHILD_ENV_*
   ENCLAVE_LISTEN
-  VFS_LISTEN
+  VFS_LISTEN-
 
 Defaults:
   SANDBOX_HOST_BUN_BIN      auto-detect from `command -v bun` or ~/.bun/bin/bun

@@ -33,6 +33,11 @@ interface ResolvedCustomEmojiInfo {
   errorText?: string;
 }
 
+interface MentionExtraction {
+  mentions: string[];
+  mentionUserIds: string[];
+}
+
 export interface UserBotAdapterOptions {
   apiId: number;
   apiHash: string;
@@ -354,6 +359,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     // Detect bot-like sender and resolve display name.
     let isBot = false;
     let senderName: string | null = null;
+    let senderUsernameHandle: string | null = null;
     try {
       if (fromId) {
         const sender = await client.getEntity(fromId);
@@ -361,6 +367,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
           const username = sender.username || "";
           isBot = sender.bot || username.toLowerCase().includes("bot") || false;
           senderName = buildDisplayNameFromEntity(sender);
+          senderUsernameHandle = normalizeUsernameHandle(sender.username);
         } else if (sender instanceof Api.Chat || sender instanceof Api.Channel) {
           senderName = buildDisplayNameFromEntity(sender);
         }
@@ -404,6 +411,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       customEmojiOccurrences,
       customEmojiInfoById
     );
+    const mentionExtraction = extractMentionsFromMessageEntities(rawContext, msg.entities);
 
     console.log(`[userbot] Ingested: from=${userId} (${senderName}) chat=${chatId} text="${text.slice(0, 20)}..." photo=${photoCount} mention=${isMentionMe} reply=${isReplyToMe} replyTo=${replyToMsgId === null ? "-" : replyToMsgId}`);
 
@@ -415,11 +423,13 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       metadata: {
         isBot,
         username: senderName,
+        usernameHandle: senderUsernameHandle,
         replyToMessageId: replyToMsgId,
         replyToUserId: replyTarget.replyToUserId,
         isReplyToMe,
         isMentionMe,
-        mentions: [],
+        mentions: mentionExtraction.mentions,
+        mentionUserIds: mentionExtraction.mentionUserIds,
       }
     };
   };
@@ -724,6 +734,43 @@ function extractCustomEmojiOccurrencesFromMessage(
     });
   }
   return occurrences;
+}
+
+function extractMentionsFromMessageEntities(
+  text: string,
+  entities?: Api.TypeMessageEntity[]
+): MentionExtraction {
+  if (!text || !entities?.length) {
+    return { mentions: [], mentionUserIds: [] };
+  }
+
+  const mentions: string[] = [];
+  const mentionUserIds: string[] = [];
+  for (const entity of entities) {
+    if (entity instanceof Api.MessageEntityMention) {
+      const mention = text.slice(entity.offset, entity.offset + entity.length).trim().toLowerCase();
+      if (mention) {
+        mentions.push(mention);
+      }
+      continue;
+    }
+    if (entity instanceof Api.MessageEntityMentionName) {
+      const userId = entity.userId?.toString().trim();
+      if (userId) {
+        mentionUserIds.push(userId);
+      }
+    }
+  }
+
+  return {
+    mentions: Array.from(new Set(mentions)),
+    mentionUserIds: Array.from(new Set(mentionUserIds)),
+  };
+}
+
+function normalizeUsernameHandle(username: string | undefined): string | null {
+  const normalized = (username ?? "").trim().toLowerCase();
+  return normalized ? `@${normalized}` : null;
 }
 
 function renderTextWithCustomEmojiTags(

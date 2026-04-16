@@ -245,6 +245,9 @@ function buildMergedMessage(messages: TelegramMessage[]): TelegramMessage {
   const mergedMentions = Array.from(
     new Set(messages.flatMap((item) => item.metadata.mentions))
   );
+  const mergedMentionUserIds = Array.from(
+    new Set(messages.flatMap((item) => item.metadata.mentionUserIds ?? []))
+  );
   const mergedContext = messages
     .map((item) => item.context)
     .filter((item) => item.length > 0)
@@ -264,6 +267,12 @@ function buildMergedMessage(messages: TelegramMessage[]): TelegramMessage {
       isReplyToMe: messages.some((item) => item.metadata.isReplyToMe),
       isMentionMe: messages.some((item) => item.metadata.isMentionMe),
       mentions: mergedMentions,
+      mentionUserIds: mergedMentionUserIds,
+      usernameHandle:
+        [...messages]
+          .reverse()
+          .map((item) => item.metadata.usernameHandle)
+          .find((item) => Boolean(item)) ?? null,
     },
   };
 }

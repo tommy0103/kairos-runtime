@@ -24,6 +24,9 @@ type TelegramTextEntity = {
   offset: number;
   length: number;
   custom_emoji_id?: string;
+  user?: {
+    id?: number | string;
+  };
 };
 
 interface CustomEmojiOccurrence {
@@ -640,11 +643,16 @@ async function toTelegramMessage(
     metadata: {
       isBot: message.from?.is_bot ?? false,
       username: buildDisplayName(message.from),
+      usernameHandle: normalizeUsernameHandle(message.from?.username),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
       isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
       isMentionMe: isMentionMe(ctx),
       mentions: extractMentions(message),
+      mentionUserIds: extractMentionUserIds(
+        rawContext,
+        rawEntities,
+      ),
     },
   };
 }
@@ -678,14 +686,16 @@ async function toEditedTelegramMessage(
     metadata: {
       isBot: message.from?.is_bot ?? false,
       username: buildDisplayName(message.from),
+      usernameHandle: normalizeUsernameHandle(message.from?.username),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
       isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
       isMentionMe: isMentionMeEdited(ctx),
       mentions: extractMentionsFromTextWithEntities(
-        "text" in message ? (message.text ?? "") : "",
-        message.entities
+        rawContext,
+        rawEntities,
       ),
+      mentionUserIds: extractMentionUserIds(rawContext, rawEntities),
     },
   };
 }
@@ -707,11 +717,13 @@ function toOutgoingTelegramMessage(
     metadata: {
       isBot: message.from?.is_bot ?? true,
       username: buildDisplayName(message.from),
+      usernameHandle: normalizeUsernameHandle(message.from?.username),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
       isReplyToMe: false,
       isMentionMe: false,
       mentions: [],
+      mentionUserIds: [],
     },
   };
 }
@@ -728,6 +740,8 @@ function toEditedResultMessage(
     isReplyToMe: false,
     isMentionMe: false,
     mentions: [] as string[],
+    mentionUserIds: [] as string[],
+    usernameHandle: null,
   };
 
   if (result === true) {
@@ -835,6 +849,31 @@ function extractMentions(message: NonNullable<Context["message"]>): string[] {
   return Array.from(new Set([...textMentions, ...captionMentions]));
 }
 
+function extractMentionUserIds(
+  text: string,
+  entities?: ReadonlyArray<TelegramTextEntity>
+): string[] {
+  if (!text || !entities?.length) {
+    return [];
+  }
+  const ids: string[] = [];
+  for (const entity of entities) {
+    if (entity.type !== "text_mention") {
+      continue;
+    }
+    const id = entity.user?.id;
+    if (id === undefined || id === null) {
+      continue;
+    }
+    const normalized = String(id).trim();
+    if (!normalized) {
+      continue;
+    }
+    ids.push(normalized);
+  }
+  return Array.from(new Set(ids));
+}
+
 function extractMentionsFromTextWithEntities(
   text: string,
   entities?: ReadonlyArray<TelegramTextEntity>
@@ -853,6 +892,11 @@ function extractMentionsFromTextWithEntities(
     }
   }
   return mentions;
+}
+
+function normalizeUsernameHandle(username: string | undefined): string | null {
+  const normalized = (username ?? "").trim().toLowerCase();
+  return normalized ? `@${normalized}` : null;
 }
 
 function extractCustomEmojiOccurrences(
