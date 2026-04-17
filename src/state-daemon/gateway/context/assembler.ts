@@ -68,7 +68,9 @@ function buildReplyPreviewNode(
     return `<reply_to_preview speaker="${escapeXml(getSpeaker(replyToMessage))}">${escapeXml(replyToMessage.context)}</reply_to_preview>`;
   }
   if (message.metadata.replyToMessageId) {
-    return `<reply_to_preview speaker="unknown">unknown</reply_to_preview>`;
+    const fallbackSpeaker = (message.metadata.replyToUserId ?? "").trim() || "unknown";
+    const fallbackText = `unavailable (reply_to=${message.metadata.replyToMessageId})`;
+    return `<reply_to_preview speaker="${escapeXml(fallbackSpeaker)}">${escapeXml(fallbackText)}</reply_to_preview>`;
   }
   return "";
 }

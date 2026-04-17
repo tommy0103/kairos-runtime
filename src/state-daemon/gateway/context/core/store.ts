@@ -283,13 +283,24 @@ export function createInMemoryContextStore(
       if (!node) {
         return [[], []];
       }
+      const anchorReplyToId = node.message.metadata.replyToMessageId;
+      const anchorReplyTarget = anchorReplyToId !== null
+        ? ccb.messageNodes.get(anchorReplyToId) ?? null
+        : null;
 
       const session = ccb.sessionControlBlocks.get(node.sessionId);
       if (!session) {
-        const recentMessages = Array.from(ccb.messageNodes.values())
+        let recentMessages = Array.from(ccb.messageNodes.values())
           .sort((a, b) => a.timestamp - b.timestamp)
           .slice(-RECENT_CHAT_MESSAGES_COUNT)
           .map((item) => item.message);
+        if (anchorReplyTarget) {
+          recentMessages = includePriorityMessage(
+            recentMessages,
+            anchorReplyTarget.message,
+            RECENT_CHAT_MESSAGES_COUNT,
+          );
+        }
         return [recentMessages, []];
       }
 
@@ -298,17 +309,33 @@ export function createInMemoryContextStore(
         .filter((item): item is MessageNode => Boolean(item))
         .sort((a, b) => a.timestamp - b.timestamp)
         .map((item) => item.message);
-      const sessionMessages =
+      let sessionMessages =
         allSessionMessages.length <= maxContextMessages
           ? allSessionMessages
           : allSessionMessages.slice(allSessionMessages.length - maxContextMessages);
-      const sessionMessageIds = new Set(sessionMessages.map((item) => item.messageId));
-      const recentMessages = Array.from(ccb.messageNodes.values())
+      const sessionMessageIds = new Set<number>(sessionMessages.map((item) => item.messageId));
+      let recentMessages = Array.from(ccb.messageNodes.values())
         .sort((a, b) => b.timestamp - a.timestamp)
         .filter((item) => !sessionMessageIds.has(item.messageId))
         .slice(0, RECENT_CHAT_MESSAGES_COUNT)
         .sort((a, b) => a.timestamp - b.timestamp)
         .map((item) => item.message);
+      if (anchorReplyTarget) {
+        const replyMessage = anchorReplyTarget.message;
+        if (anchorReplyTarget.sessionId === session.sessionId) {
+          sessionMessages = includePriorityMessage(
+            sessionMessages,
+            replyMessage,
+            maxContextMessages,
+          );
+        } else {
+          recentMessages = includePriorityMessage(
+            recentMessages,
+            replyMessage,
+            RECENT_CHAT_MESSAGES_COUNT,
+          );
+        }
+      }
       return [recentMessages, sessionMessages];
     },
     getSessionIdForMessage: ({ chatId, messageId }) => {
@@ -572,6 +599,35 @@ function updateLastMessageNodeId(ccb: ChatControlBlock, candidate: MessageNode):
   if (!previous || candidate.timestamp >= previous.timestamp) {
     ccb.lastMessageNodeId = candidate.messageId;
   }
+}
+
+function includePriorityMessage(
+  messages: TelegramMessage[],
+  priority: TelegramMessage,
+  maxCount: number,
+): TelegramMessage[] {
+  if (messages.some((item) => item.messageId === priority.messageId)) {
+    return messages;
+  }
+  const sorted = [...messages, priority].sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp - b.timestamp;
+    }
+    return a.messageId - b.messageId;
+  });
+  if (sorted.length <= maxCount) {
+    return sorted;
+  }
+
+  const rest = sorted.filter((item) => item.messageId !== priority.messageId);
+  const keepCount = Math.max(0, maxCount - 1);
+  const keptTail = rest.slice(Math.max(0, rest.length - keepCount));
+  return [...keptTail, priority].sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp - b.timestamp;
+    }
+    return a.messageId - b.messageId;
+  });
 }
 
 async function archiveSession(

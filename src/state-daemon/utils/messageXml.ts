@@ -23,8 +23,23 @@ export function formatNormalMessageNode(message: TelegramMessage, replyToMessage
   </message>`;
 }
 
-export function getSpeaker(message: { metadata: { username: string | null } }): string {
-  return message.metadata.username ?? "unknown";
+export function getSpeaker(message: {
+  metadata: { username: string | null; usernameHandle?: string | null };
+  userId?: string;
+}): string {
+  const username = (message.metadata.username ?? "").trim();
+  if (username) {
+    return username;
+  }
+  const handle = (message.metadata.usernameHandle ?? "").trim();
+  if (handle) {
+    return handle;
+  }
+  const userId = (message.userId ?? "").trim();
+  if (userId && userId !== "unknown") {
+    return userId;
+  }
+  return "unknown";
 }
 
 export function formatTimestampUtc8(timestamp: number): string {
