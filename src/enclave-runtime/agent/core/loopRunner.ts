@@ -410,16 +410,45 @@ function extractVisionMessageText(content: unknown): string {
 }
 
 function injectVisionDescription(messages: AgentLoopMessage[], description: string): AgentLoopMessage[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
-      return messages.map((m, idx) =>
-        idx === i
-          ? { ...m, content: m.content.replace(/\[photo(?:\s*x\d+)?\]/g, `[图片内容: ${description}]`) }
-          : m
-      );
+  let replacedAny = false;
+  const replacedMessages = messages.map((message) => {
+    if (message.role !== "user") {
+      return message;
     }
+    const content = message.content.replace(
+      /\[photo(?:\s*x\d+)?\]/g,
+      `[图片内容: ${description}]`
+    );
+    if (content !== message.content) {
+      replacedAny = true;
+      return { ...message, content };
+    }
+    return message;
+  });
+
+  if (replacedAny) {
+    return replacedMessages;
   }
-  return messages;
+
+  for (let i = replacedMessages.length - 1; i >= 0; i--) {
+    if (replacedMessages[i].role !== "user") {
+      continue;
+    }
+    const suffix = `\n\n[图片内容: ${description}]`;
+    replacedMessages[i] = {
+      ...replacedMessages[i],
+      content: `${replacedMessages[i].content}${suffix}`,
+    };
+    if (VISION_DEBUG_ENABLED) {
+      console.warn("[vision] no [photo] placeholder found, appended image description to last user message");
+    }
+    return replacedMessages;
+  }
+
+  return [
+    ...replacedMessages,
+    { role: "user", content: `[图片内容: ${description}]` },
+  ];
 }
 
 async function preprocessVisionContent(
