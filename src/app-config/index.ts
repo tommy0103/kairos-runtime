@@ -438,17 +438,23 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
     "stateDaemon.customEmojiToText.enabled",
     false
   );
+  const visionModelRaw = process.env.VISION_MODEL;
+  const visionBaseURLRaw = process.env.VISION_BASE_URL;
+  const visionApiKeyRaw = process.env.VISION_API_KEY;
   const customEmojiModelRaw =
+    visionModelRaw ??
     process.env.CUSTOM_EMOJI_TO_TEXT_MODEL ??
     (typeof customEmojiConfig.model === "string"
       ? resolveEnvReference(customEmojiConfig.model, "stateDaemon.customEmojiToText.model")
       : undefined);
   const customEmojiBaseURLRaw =
+    visionBaseURLRaw ??
     process.env.CUSTOM_EMOJI_TO_TEXT_BASE_URL ??
     (typeof customEmojiConfig.baseURL === "string"
       ? resolveEnvReference(customEmojiConfig.baseURL, "stateDaemon.customEmojiToText.baseURL")
       : undefined);
   const customEmojiApiKeyRaw =
+    visionApiKeyRaw ??
     process.env.CUSTOM_EMOJI_TO_TEXT_API_KEY ??
     (typeof customEmojiConfig.apiKey === "string"
       ? resolveEnvReference(customEmojiConfig.apiKey, "stateDaemon.customEmojiToText.apiKey")
