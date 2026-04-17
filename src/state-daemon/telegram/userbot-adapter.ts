@@ -330,14 +330,25 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
   const downloadPhoto = async (msg: Api.Message): Promise<string | null> => {
     if (!(msg.media instanceof Api.MessageMediaPhoto)) return null;
     try {
-      const buffer = await client.downloadMedia(msg.media as any, { workers: 1 } as any);
-      if (buffer && buffer instanceof Buffer) {
+      const downloaded = await client.downloadMedia(msg.media as any, { workers: 1 } as any);
+      let buffer: Buffer | null = null;
+      if (Buffer.isBuffer(downloaded)) {
+        buffer = downloaded;
+      } else if (ArrayBuffer.isView(downloaded)) {
+        buffer = Buffer.from(downloaded.buffer, downloaded.byteOffset, downloaded.byteLength);
+      }
+
+      if (buffer) {
         const fileName = `vision-${msg.peerId?.toJSON()}-${msg.id}.jpg`;
         const filePath = `/tmp/kairos-vision/${fileName}`;
         await fs.mkdir("/tmp/kairos-vision", { recursive: true });
         await fs.writeFile(filePath, buffer);
-        return `file://${filePath}`;
+        return filePath;
       }
+      console.warn(
+        "[userbot] downloadMedia returned unsupported photo payload type:",
+        typeof downloaded,
+      );
     } catch (e) {
       console.error("[userbot] Failed to download media:", e);
     }

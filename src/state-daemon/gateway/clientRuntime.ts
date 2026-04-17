@@ -99,6 +99,9 @@ const SESSION_DEBUG_LOG_PATH = join(
 const LONG_RUNNING_STATUS_INTERVAL_MS = 15000;
 const DEFAULT_PROBE_MODEL_PROVIDER = "ollama";
 const DEFAULT_SEND_MESSAGE_MODE = "strict";
+const VISION_DEBUG_ENABLED = /^(1|true|yes)$/i.test(
+  (process.env.VISION_DEBUG ?? "").trim()
+);
 type SendMessageMode = "strict" | "compat";
 
 function statusTextForToolStart(toolName: string): string {
@@ -382,10 +385,22 @@ export function createClientRuntime(options: CreateClientRuntimeOptions): Client
         }, LONG_RUNNING_STATUS_INTERVAL_MS);
 
         let startedStreamingText = false;
+        const imageUrls = (triggerMessage.imageUrls ?? [])
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+        if (triggerMessage.context.includes("[photo") && imageUrls.length === 0) {
+          console.warn(
+            `[vision] trigger has photo placeholder but no imageUrls chat=${triggerMessage.chatId} messageId=${triggerMessage.messageId}`,
+          );
+        } else if (VISION_DEBUG_ENABLED && imageUrls.length > 0) {
+          console.log(
+            `[vision] forwarding imageUrls chat=${triggerMessage.chatId} messageId=${triggerMessage.messageId} count=${imageUrls.length}`,
+          );
+        }
         for await (const event of enclaveClient.streamReply({
           chatId: triggerMessage.chatId,
           messages: llmMessages,
-          imageUrls: triggerMessage.imageUrls,
+          imageUrls,
         })) {
           if (event.type === "tool_execution_start") {
             stream.push({

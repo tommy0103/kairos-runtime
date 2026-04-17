@@ -88,6 +88,9 @@ export interface CreateAgentLoopRunnerOptions {
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_SEND_MESSAGE_MODE = "strict";
 const DEFAULT_STRICT_TEXT_FALLBACK = true;
+const VISION_DEBUG_ENABLED = /^(1|true|yes)$/i.test(
+  (process.env.VISION_DEBUG ?? "").trim()
+);
 type SendMessageMode = "strict" | "compat";
 
 function createCompatibleModel(modelId: string, baseURL: string): Model<"openai-completions"> {
@@ -385,6 +388,27 @@ function resolveVisionEndpointConfig(options: {
   return { apiKey, baseURL, modelId };
 }
 
+function extractVisionMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const text = content
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return "";
+      }
+      const maybeText = (item as { text?: unknown }).text;
+      return typeof maybeText === "string" ? maybeText : "";
+    })
+    .filter((item) => item.length > 0)
+    .join("\n")
+    .trim();
+  return text;
+}
+
 function injectVisionDescription(messages: AgentLoopMessage[], description: string): AgentLoopMessage[] {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user") {
@@ -422,9 +446,22 @@ async function preprocessVisionContent(
           ...valid.map((u) => ({ type: "image_url", image_url: { url: u } })),
         ],
       }],
-      max_tokens: 800,
+      max_tokens: 240,
     });
-    return json?.choices?.[0]?.message?.content ?? null;
+    const text = extractVisionMessageText(json?.choices?.[0]?.message?.content);
+    if (!text) {
+      if (VISION_DEBUG_ENABLED) {
+        console.warn(
+          "[vision] empty content from vision model response",
+          JSON.stringify({
+            hasChoices: Array.isArray(json?.choices),
+            model: modelId,
+          }),
+        );
+      }
+      return null;
+    }
+    return text;
   } catch (err) {
     console.warn("[vision] preprocessing failed:", err);
     return null;
@@ -448,6 +485,9 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
     const { imageUrls, ...genOpts } = generateOptions;
     const model = createCompatibleModel(genOpts.model ?? options.defaultModel, options.baseURL);
     if (imageUrls?.length) {
+      if (VISION_DEBUG_ENABLED) {
+        console.log(`[vision] preprocessing start count=${imageUrls.length}`);
+      }
       const vision = resolveVisionEndpointConfig({
         apiKey: options.apiKey,
         baseURL: options.baseURL,
@@ -460,7 +500,12 @@ export function createAgentLoopRunner(options: CreateAgentLoopRunnerOptions): Ag
         vision.modelId,
       );
       if (description) {
+        if (VISION_DEBUG_ENABLED) {
+          console.log(`[vision] description injected length=${description.length}`);
+        }
         messages = injectVisionDescription(messages, description);
+      } else if (VISION_DEBUG_ENABLED) {
+        console.warn("[vision] description is empty after preprocessing");
       }
     }
 
