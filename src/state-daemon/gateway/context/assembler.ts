@@ -1,5 +1,6 @@
 import { escapeXml, formatNormalMessageNode, formatTimestampUtc8, getSpeaker } from "../../utils/messageXml";
 import type { ContextAssembler } from "./core/types";
+import type { TelegramMessage } from "../../types/message";
 
 export function createContextAssembler(): ContextAssembler {
   return {
@@ -13,18 +14,41 @@ export function createContextAssembler(): ContextAssembler {
         .filter((item) => item.messageId !== triggerId)
         .slice()
         .sort((a, b) => a.timestamp - b.timestamp);
+      const messageIndex = new Map<number, TelegramMessage>();
+      for (const message of normalizedRecent) {
+        messageIndex.set(message.messageId, message);
+      }
+      for (const message of normalizedContext) {
+        messageIndex.set(message.messageId, message);
+      }
+
+      const findReplyTarget = (replyToMessageId: number | null): TelegramMessage | undefined => {
+        if (replyToMessageId === null) {
+          return undefined;
+        }
+        return messageIndex.get(replyToMessageId);
+      };
+
+      const currentReplyPreview = buildReplyPreviewNode(
+        triggerMessage,
+        findReplyTarget(triggerMessage.metadata.replyToMessageId),
+      );
+      const currentReplyToAttribute = triggerMessage.metadata.replyToMessageId
+        ? ` reply_to="${triggerMessage.metadata.replyToMessageId}"`
+        : "";
 
       const xml = `<context>
   <recent_messages>
 ${normalizedRecent.map((message) => formatNormalMessageNode(message, 
-  message.metadata.replyToMessageId ? normalizedRecent.find((item) => item.messageId === message.metadata.replyToMessageId) : undefined)).join("\n")}
+  findReplyTarget(message.metadata.replyToMessageId))).join("\n")}
   </recent_messages>
   <related_history>
 ${normalizedContext.map((message) => formatNormalMessageNode(message, 
-  message.metadata.replyToMessageId ? normalizedContext.find((item) => item.messageId === message.metadata.replyToMessageId) : undefined)).join("\n")}
+  findReplyTarget(message.metadata.replyToMessageId))).join("\n")}
   </related_history>
 </context>
-<current_message speaker="${escapeXml(getSpeaker(triggerMessage))}" timestamp="${formatTimestampUtc8(triggerMessage.timestamp)}">
+<current_message id="${triggerMessage.messageId}" speaker="${escapeXml(getSpeaker(triggerMessage))}" timestamp="${formatTimestampUtc8(triggerMessage.timestamp)}"${currentReplyToAttribute}>
+  ${currentReplyPreview}
   ${escapeXml(triggerMessage.context)}
 </current_message>`;
 
@@ -34,4 +58,17 @@ ${normalizedContext.map((message) => formatNormalMessageNode(message,
       ];
     },
   };
+}
+
+function buildReplyPreviewNode(
+  message: TelegramMessage,
+  replyToMessage?: TelegramMessage
+): string {
+  if (replyToMessage) {
+    return `<reply_to_preview speaker="${escapeXml(getSpeaker(replyToMessage))}">${escapeXml(replyToMessage.context)}</reply_to_preview>`;
+  }
+  if (message.metadata.replyToMessageId) {
+    return `<reply_to_preview speaker="unknown">unknown</reply_to_preview>`;
+  }
+  return "";
 }

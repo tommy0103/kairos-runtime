@@ -53,6 +53,7 @@ export function createTelegramAdapter(
 ): TelegramAdapter {
   const bot = new Bot(token);
   const messages: TelegramMessage[] = [];
+  const messageAuthorByChat = new Map<number, Map<number, string>>();
   const streams = new Map<number, StreamState>();
   const typingIntervals = new Map<number, ReturnType<typeof setInterval>>();
   const pendingMediaGroups = new Map<
@@ -71,6 +72,7 @@ export function createTelegramAdapter(
   const editedMessageHandlers = new Set<
     (message: TelegramMessage) => void | Promise<void>
   >();
+  let botUserId: string | null = null;
   const customEmojiStore = createImageAltTextStore(customEmojiToTextConfig?.dbPath);
   customEmojiStore.hydrate();
 
@@ -165,6 +167,74 @@ export function createTelegramAdapter(
       await bot.api.sendChatAction(chatId, "typing");
     } catch (e) {
       // Ignore chat-action errors.
+    }
+  };
+
+  const rememberMessageAuthor = (
+    chatId: number,
+    messageId: number,
+    userId: string | null | undefined
+  ): void => {
+    const normalized = (userId ?? "").trim();
+    if (!Number.isFinite(chatId) || !Number.isFinite(messageId) || !normalized || normalized === "unknown" || normalized === "bot") {
+      return;
+    }
+    let bucket = messageAuthorByChat.get(chatId);
+    if (!bucket) {
+      bucket = new Map<number, string>();
+      messageAuthorByChat.set(chatId, bucket);
+    }
+    bucket.set(messageId, normalized);
+  };
+
+  const getRememberedMessageAuthor = (chatId: number, messageId: number): string | null => {
+    return messageAuthorByChat.get(chatId)?.get(messageId) ?? null;
+  };
+
+  const hydrateReplyMetadata = (message: TelegramMessage): TelegramMessage => {
+    const replyToMessageId = message.metadata.replyToMessageId;
+    let replyToUserId = message.metadata.replyToUserId;
+    if (replyToMessageId !== null && !replyToUserId) {
+      replyToUserId = getRememberedMessageAuthor(message.chatId, replyToMessageId);
+    }
+
+    const isOwnMessage =
+      message.userId === "bot" ||
+      (botUserId !== null && message.userId === botUserId);
+    let isReplyToMe = message.metadata.isReplyToMe;
+    if (!isOwnMessage && replyToUserId && botUserId) {
+      isReplyToMe = replyToUserId === botUserId;
+    }
+
+    if (
+      replyToUserId === message.metadata.replyToUserId &&
+      isReplyToMe === message.metadata.isReplyToMe
+    ) {
+      return message;
+    }
+
+    return {
+      ...message,
+      metadata: {
+        ...message.metadata,
+        replyToUserId,
+        isReplyToMe,
+      },
+    };
+  };
+
+  const rememberMessageAuthorsFromPayload = (message: TelegramMessage): void => {
+    const effectiveUserId =
+      message.userId === "bot"
+        ? botUserId
+        : message.userId;
+    rememberMessageAuthor(message.chatId, message.messageId, effectiveUserId);
+    if (message.metadata.replyToMessageId !== null && message.metadata.replyToUserId) {
+      rememberMessageAuthor(
+        message.chatId,
+        message.metadata.replyToMessageId,
+        message.metadata.replyToUserId,
+      );
     }
   };
 
@@ -268,17 +338,21 @@ export function createTelegramAdapter(
   };
 
   const dispatchMessage = (message: TelegramMessage) => {
-    messages.push(message);
+    const hydrated = hydrateReplyMetadata(message);
+    rememberMessageAuthorsFromPayload(hydrated);
+    messages.push(hydrated);
     for (const handler of messageHandlers) {
-      void Promise.resolve(handler(message)).catch((error) => {
+      void Promise.resolve(handler(hydrated)).catch((error) => {
         console.error("telegram onMessage handler failed:", error);
       });
     }
   };
 
   const dispatchEditedMessage = (message: TelegramMessage) => {
+    const hydrated = hydrateReplyMetadata(message);
+    rememberMessageAuthorsFromPayload(hydrated);
     for (const handler of editedMessageHandlers) {
-      void Promise.resolve(handler(message)).catch((error) => {
+      void Promise.resolve(handler(hydrated)).catch((error) => {
         console.error("telegram onEditedMessage handler failed:", error);
       });
     }
@@ -561,6 +635,7 @@ export function createTelegramAdapter(
   };
 
   bot.on("message", async (ctx, next) => {
+    botUserId = ctx.me.id.toString();
     const mediaGroupId = ctx.message?.media_group_id;
     if (mediaGroupId) {
       queueMediaGroupMessage(ctx, mediaGroupId);
@@ -580,6 +655,7 @@ export function createTelegramAdapter(
   });
 
   bot.on("edited_message", async (ctx, next) => {
+    botUserId = ctx.me.id.toString();
     const message = await toEditedTelegramMessage(ctx, renderCustomEmojiText);
     if (!message) {
       return;

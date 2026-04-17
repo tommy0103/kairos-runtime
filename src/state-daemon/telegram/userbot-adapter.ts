@@ -50,6 +50,7 @@ export interface UserBotAdapterOptions {
 export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAdapter {
   const client = new TelegramClient(new StringSession(options.sessionString || ""), options.apiId, options.apiHash, { connectionRetries: 10, useWSS: false, autoReconnect: true });
   const sentMessageIds = new Set<string>();
+  const messageAuthorByChat = new Map<number, Map<number, string>>();
   const streams = new Map<number, StreamState>();
   let nextStreamId = 1;
   const messageHandlers = new Set<any>();
@@ -240,6 +241,36 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     return sentMessageIds.has(sentMessageKey(chatId, messageId));
   };
 
+  const rememberMessageAuthor = (
+    chatId: number,
+    messageId: number,
+    userId: string | null | undefined,
+  ): void => {
+    const normalized = (userId ?? "").trim();
+    if (!Number.isFinite(chatId) || !Number.isFinite(messageId) || !normalized || normalized === "unknown") {
+      return;
+    }
+    let bucket = messageAuthorByChat.get(chatId);
+    if (!bucket) {
+      bucket = new Map<number, string>();
+      messageAuthorByChat.set(chatId, bucket);
+    }
+    bucket.set(messageId, normalized);
+  };
+
+  const getRememberedMessageAuthor = (chatId: number, messageId: number): string | null => {
+    return messageAuthorByChat.get(chatId)?.get(messageId) ?? null;
+  };
+
+  const rememberOutgoingMessage = (chatId: number, message: Api.Message): void => {
+    rememberSentMessage(chatId, message.id);
+    const fromUserId =
+      message.fromId instanceof Api.PeerUser
+        ? message.fromId.userId.toString()
+        : me?.id?.toString() ?? null;
+    rememberMessageAuthor(chatId, message.id, fromUserId);
+  };
+
   const buildDisplayNameFromUser = (user: Api.User): string | null => {
     const firstName = (user.firstName || "").trim();
     const lastName = (user.lastName || "").trim();
@@ -295,8 +326,18 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       return { isReplyToMe: false, replyToUserId: null };
     }
 
+    const meUserId = me.id.toString();
+    const rememberedUserId = getRememberedMessageAuthor(chatId, replyToMsgId);
+    if (rememberedUserId) {
+      return {
+        isReplyToMe: rememberedUserId === meUserId,
+        replyToUserId: rememberedUserId,
+      };
+    }
+
     if (hasSentMessage(chatId, replyToMsgId)) {
-      return { isReplyToMe: true, replyToUserId: me.id.toString() };
+      rememberMessageAuthor(chatId, replyToMsgId, meUserId);
+      return { isReplyToMe: true, replyToUserId: meUserId };
     }
 
     try {
@@ -312,7 +353,8 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         const repliedFromId = repliedMessage.fromId;
         if (repliedFromId instanceof Api.PeerUser) {
           const replyToUserId = repliedFromId.userId.toString();
-          const isReplyToMe = replyToUserId === me.id.toString();
+          rememberMessageAuthor(chatId, replyToMsgId, replyToUserId);
+          const isReplyToMe = replyToUserId === meUserId;
           if (isReplyToMe) {
             rememberSentMessage(chatId, replyToMsgId);
           }
@@ -332,12 +374,13 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     if (!me || !msg.peerId) return null;
     const fromId = msg.fromId;
     const userId = fromId instanceof Api.PeerUser ? fromId.userId.toString() : "unknown";
-    
-    if (userId === me.id.toString()) return null;
 
     const chatId = msg.peerId instanceof Api.PeerUser ? msg.peerId.userId.toJSNumber() :
                    (msg.peerId instanceof Api.PeerChat ? msg.peerId.chatId.toJSNumber() :
                    (msg.peerId instanceof Api.PeerChannel ? msg.peerId.channelId.toJSNumber() : 0));
+    rememberMessageAuthor(chatId, msg.id, userId);
+
+    if (userId === me.id.toString()) return null;
 
     const conversationType = msg.peerId instanceof Api.PeerUser ? "private" : "group";
     const replyToMsgIdRaw =
@@ -554,7 +597,9 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     reply: async (chatId, text, messageId) => {
       const target = await getSafeEntity(chatId);
       const sent = await client.sendMessage(target, { message: text, replyTo: messageId });
-      if (sent instanceof Api.Message) rememberSentMessage(chatId, sent.id);
+      if (sent instanceof Api.Message) {
+        rememberOutgoingMessage(chatId, sent);
+      }
     },
     sendMediaBatch: async (chatId, items, options) => {
       const result: TelegramSendMediaBatchResult = {
@@ -591,7 +636,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
             }
             const sent = await (client as any).sendFile(target, sendOptions);
             if (sent instanceof Api.Message) {
-              rememberSentMessage(chatId, sent.id);
+              rememberOutgoingMessage(chatId, sent);
             }
             result.sentCount += 1;
             uploadSequence += 1;
@@ -625,7 +670,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         });
         if (sent instanceof Api.Message) {
           placeholderMessageId = sent.id;
-          rememberSentMessage(chatId, sent.id);
+          rememberOutgoingMessage(chatId, sent);
         }
       } catch (error) {
         console.warn("[userbot] failed to send stream placeholder:", error);
@@ -677,7 +722,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         replyTo: s.replyToMessageId || undefined,
       });
       if (sent instanceof Api.Message) {
-        rememberSentMessage(s.chatId, sent.id);
+        rememberOutgoingMessage(s.chatId, sent);
         console.log(`[userbot] Record sent message ID: ${sent.id}`);
       }
       streams.delete(id);

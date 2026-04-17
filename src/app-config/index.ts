@@ -46,7 +46,7 @@ interface StateDaemonConfig {
     mode: "bot" | "userbot";
     botToken?: string;
     userbot?: UserBotConfig;
-    ownerUserId: string;
+    ownerUserId?: string;
   };
   triggers: {
     editedMessage: boolean;
@@ -343,8 +343,23 @@ export function loadStateDaemonConfig(options: LoadOptions = {}): StateDaemonCon
     throw new Error(`Invalid telegram mode: ${mode}. Expected "bot" or "userbot".`);
   }
   
-  const ownerUserId =
-    process.env.OWNER_USER_ID ?? requireString(telegramConfig.ownerUserId, "stateDaemon.telegram.ownerUserId");
+  const ownerUserId = (() => {
+    if (typeof process.env.OWNER_USER_ID === "string" && process.env.OWNER_USER_ID.trim()) {
+      return process.env.OWNER_USER_ID;
+    }
+    if (typeof telegramConfig.ownerUserId !== "string") {
+      return undefined;
+    }
+    try {
+      const resolved = resolveEnvReference(
+        telegramConfig.ownerUserId,
+        "stateDaemon.telegram.ownerUserId"
+      ).trim();
+      return resolved || undefined;
+    } catch {
+      return undefined;
+    }
+  })();
   
   let telegramResult: StateDaemonConfig["telegram"];
   
