@@ -84,6 +84,8 @@ function toVfsChatMessage(message: TelegramMessage, vector: number[]): ChatMessa
       username: message.metadata.username ?? "",
       replyToMessageId: String(message.metadata.replyToMessageId ?? ""),
       replyToUserId: message.metadata.replyToUserId ?? "",
+      replyToUsername: message.metadata.replyToUsername ?? "",
+      replyToPreviewText: message.metadata.replyToPreviewText ?? "",
       isReplyToMe: message.metadata.isReplyToMe,
       isMentionMe: message.metadata.isMentionMe,
       mentions: message.metadata.mentions,

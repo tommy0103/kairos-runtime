@@ -22,6 +22,8 @@ export interface TelegramMessage {
     username: string | null;
     replyToMessageId: number | null;
     replyToUserId: string | null;
+    replyToUsername?: string | null;
+    replyToPreviewText?: string | null;
     isReplyToMe: boolean;
     isMentionMe: boolean;
     mentions: string[];

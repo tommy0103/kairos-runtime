@@ -29,6 +29,39 @@ type TelegramTextEntity = {
   };
 };
 
+type TelegramIncomingMessageLike = {
+  text?: string;
+  caption?: string;
+  photo?: ReadonlyArray<unknown>;
+  sticker?: {
+    emoji?: string;
+  };
+  document?: unknown;
+  audio?: unknown;
+  voice?: unknown;
+  video?: unknown;
+  animation?: unknown;
+  reply_to_message?: {
+    text?: string;
+    caption?: string;
+    photo?: ReadonlyArray<unknown>;
+    sticker?: {
+      emoji?: string;
+    };
+    document?: unknown;
+    audio?: unknown;
+    voice?: unknown;
+    video?: unknown;
+    animation?: unknown;
+    from?: {
+      id?: number | string;
+      first_name?: string;
+      last_name?: string;
+      username?: string;
+    };
+  };
+};
+
 interface CustomEmojiOccurrence {
   customEmojiId: string;
   fallbackEmoji: string;
@@ -197,6 +230,10 @@ export function createTelegramAdapter(
     if (replyToMessageId !== null && !replyToUserId) {
       replyToUserId = getRememberedMessageAuthor(message.chatId, replyToMessageId);
     }
+    let replyToUsername = message.metadata.replyToUsername ?? null;
+    if (!replyToUsername && replyToUserId) {
+      replyToUsername = replyToUserId;
+    }
 
     const isOwnMessage =
       message.userId === "bot" ||
@@ -208,6 +245,7 @@ export function createTelegramAdapter(
 
     if (
       replyToUserId === message.metadata.replyToUserId &&
+      replyToUsername === (message.metadata.replyToUsername ?? null) &&
       isReplyToMe === message.metadata.isReplyToMe
     ) {
       return message;
@@ -218,6 +256,7 @@ export function createTelegramAdapter(
       metadata: {
         ...message.metadata,
         replyToUserId,
+        replyToUsername,
         isReplyToMe,
       },
     };
@@ -708,6 +747,7 @@ async function toTelegramMessage(
   const photoCount = photoCountOverride ?? ((message.photo?.length ?? 0) > 0 ? 1 : 0);
   const photoPlaceholder =
     photoCount <= 0 ? "" : photoCount === 1 ? "[photo]" : `[photo x${photoCount}]`;
+  const replySnapshot = extractReplySnapshotFromTelegramMessage(message);
 
   return {
     userId: message.from?.id?.toString() ?? "unknown",
@@ -722,6 +762,8 @@ async function toTelegramMessage(
       usernameHandle: normalizeUsernameHandle(message.from?.username),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
+      replyToUsername: replySnapshot.replyToUsername,
+      replyToPreviewText: replySnapshot.replyToPreviewText,
       isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
       isMentionMe: isMentionMe(ctx),
       mentions: extractMentions(message),
@@ -751,6 +793,7 @@ async function toEditedTelegramMessage(
   const stickerEmoji = message.sticker?.emoji ?? "";
   const photoCount = (message.photo?.length ?? 0) > 0 ? 1 : 0;
   const photoPlaceholder = photoCount <= 0 ? "" : "[photo]";
+  const replySnapshot = extractReplySnapshotFromTelegramMessage(message);
 
   return {
     userId: message.from?.id?.toString() ?? "unknown",
@@ -765,6 +808,8 @@ async function toEditedTelegramMessage(
       usernameHandle: normalizeUsernameHandle(message.from?.username),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
+      replyToUsername: replySnapshot.replyToUsername,
+      replyToPreviewText: replySnapshot.replyToPreviewText,
       isReplyToMe: message.reply_to_message?.from?.id === ctx.me.id,
       isMentionMe: isMentionMeEdited(ctx),
       mentions: extractMentionsFromTextWithEntities(
@@ -783,6 +828,7 @@ function toOutgoingTelegramMessage(
     return null;
   }
   const context = (message as { text?: string; caption?: string }).text ?? (message as { caption?: string }).caption ?? "";
+  const replySnapshot = extractReplySnapshotFromTelegramMessage(message as TelegramIncomingMessageLike);
   return {
     userId: message.from?.id?.toString() ?? "bot",
     messageId: message.message_id,
@@ -796,6 +842,8 @@ function toOutgoingTelegramMessage(
       usernameHandle: normalizeUsernameHandle(message.from?.username),
       replyToMessageId: message.reply_to_message?.message_id ?? null,
       replyToUserId: message.reply_to_message?.from?.id?.toString() ?? null,
+      replyToUsername: replySnapshot.replyToUsername,
+      replyToPreviewText: replySnapshot.replyToPreviewText,
       isReplyToMe: false,
       isMentionMe: false,
       mentions: [],
@@ -813,6 +861,8 @@ function toEditedResultMessage(
     isBot: true,
     replyToMessageId: state.replyToMessageId,
     replyToUserId: state.replyToUserId,
+    replyToUsername: state.replyToUserId,
+    replyToPreviewText: null,
     isReplyToMe: false,
     isMentionMe: false,
     mentions: [] as string[],
@@ -973,6 +1023,68 @@ function extractMentionsFromTextWithEntities(
 function normalizeUsernameHandle(username: string | undefined): string | null {
   const normalized = (username ?? "").trim().toLowerCase();
   return normalized ? `@${normalized}` : null;
+}
+
+function normalizeReplyPreviewText(value: string | null | undefined): string | null {
+  const normalized = (value ?? "").trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= 180) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 177)}...`;
+}
+
+function extractReplyPreviewFromTelegramMessage(
+  message: NonNullable<TelegramIncomingMessageLike["reply_to_message"]>
+): string | null {
+  const raw = normalizeReplyPreviewText(message.text ?? message.caption ?? null);
+  if (raw) {
+    return raw;
+  }
+  const stickerEmoji = (message.sticker?.emoji ?? "").trim();
+  if (stickerEmoji) {
+    return `[sticker ${stickerEmoji}]`;
+  }
+  if ((message.photo?.length ?? 0) > 0) {
+    return "[photo]";
+  }
+  if (message.video || message.animation) {
+    return "[video]";
+  }
+  if (message.voice) {
+    return "[voice]";
+  }
+  if (message.audio) {
+    return "[audio]";
+  }
+  if (message.document) {
+    return "[file]";
+  }
+  return null;
+}
+
+function extractReplySnapshotFromTelegramMessage(
+  message: TelegramIncomingMessageLike
+): { replyToUsername: string | null; replyToPreviewText: string | null } {
+  const reply = message.reply_to_message;
+  if (!reply) {
+    return {
+      replyToUsername: null,
+      replyToPreviewText: null,
+    };
+  }
+
+  const speakerFromName = buildDisplayName(reply.from);
+  const speakerFromId =
+    reply.from?.id === undefined || reply.from?.id === null
+      ? null
+      : String(reply.from.id);
+  return {
+    replyToUsername: speakerFromName ?? speakerFromId,
+    replyToPreviewText: extractReplyPreviewFromTelegramMessage(reply),
+  };
 }
 
 function extractCustomEmojiOccurrences(

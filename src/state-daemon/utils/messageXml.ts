@@ -9,7 +9,14 @@ export function formatNormalMessageNode(message: TelegramMessage, replyToMessage
   const messageTemplate = `id="${message.messageId}" speaker="${escapeXml(getSpeaker(message))}" timestamp="${formatTimestampUtc8(message.timestamp)}" ${message.metadata.replyToMessageId ? `reply_to="${message.metadata.replyToMessageId}"` : ""}`;
   let replyToPreview = replyToMessage ? `<reply_to_preview speaker="${escapeXml(getSpeaker(replyToMessage))}">${escapeXml(replyToMessage.context)}</reply_to_preview>` : "";
   if (message.metadata.replyToMessageId && !replyToMessage) {
-    replyToPreview = `<reply_to_preview speaker="unknown">unknown</reply_to_preview>`;
+    const fallbackSpeaker =
+      (message.metadata.replyToUsername ?? "").trim() ||
+      (message.metadata.replyToUserId ?? "").trim() ||
+      "unknown";
+    const fallbackText =
+      (message.metadata.replyToPreviewText ?? "").trim() ||
+      `unavailable (reply_to=${message.metadata.replyToMessageId})`;
+    replyToPreview = `<reply_to_preview speaker="${escapeXml(fallbackSpeaker)}">${escapeXml(fallbackText)}</reply_to_preview>`;
   }
   if (message.metadata.isBot) {
     return `<agent_message ${messageTemplate}>

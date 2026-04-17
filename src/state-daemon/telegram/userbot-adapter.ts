@@ -51,6 +51,10 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
   const client = new TelegramClient(new StringSession(options.sessionString || ""), options.apiId, options.apiHash, { connectionRetries: 10, useWSS: false, autoReconnect: true });
   const sentMessageIds = new Set<string>();
   const messageAuthorByChat = new Map<number, Map<number, string>>();
+  const messagePreviewByChat = new Map<
+    number,
+    Map<number, { username: string | null; previewText: string | null }>
+  >();
   const streams = new Map<number, StreamState>();
   let nextStreamId = 1;
   const messageHandlers = new Set<any>();
@@ -262,6 +266,33 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
     return messageAuthorByChat.get(chatId)?.get(messageId) ?? null;
   };
 
+  const rememberMessagePreview = (
+    chatId: number,
+    messageId: number,
+    username: string | null | undefined,
+    previewText: string | null | undefined,
+  ): void => {
+    if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) {
+      return;
+    }
+    let bucket = messagePreviewByChat.get(chatId);
+    if (!bucket) {
+      bucket = new Map<number, { username: string | null; previewText: string | null }>();
+      messagePreviewByChat.set(chatId, bucket);
+    }
+    bucket.set(messageId, {
+      username: (username ?? "").trim() || null,
+      previewText: normalizeReplyPreviewText(previewText),
+    });
+  };
+
+  const getRememberedMessagePreview = (
+    chatId: number,
+    messageId: number,
+  ): { username: string | null; previewText: string | null } | null => {
+    return messagePreviewByChat.get(chatId)?.get(messageId) ?? null;
+  };
+
   const rememberOutgoingMessage = (chatId: number, message: Api.Message): void => {
     rememberSentMessage(chatId, message.id);
     const fromUserId =
@@ -269,6 +300,13 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         ? message.fromId.userId.toString()
         : me?.id?.toString() ?? null;
     rememberMessageAuthor(chatId, message.id, fromUserId);
+    const senderName = me ? buildDisplayNameFromUser(me) : null;
+    rememberMessagePreview(
+      chatId,
+      message.id,
+      senderName,
+      extractReplyPreviewFromApiMessage(message),
+    );
   };
 
   const buildDisplayNameFromUser = (user: Api.User): string | null => {
@@ -321,23 +359,43 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
   const resolveReplyTarget = async (
     chatId: number,
     replyToMsgId: number | null,
-  ): Promise<{ isReplyToMe: boolean; replyToUserId: string | null }> => {
+  ): Promise<{
+    isReplyToMe: boolean;
+    replyToUserId: string | null;
+    replyToUsername: string | null;
+    replyToPreviewText: string | null;
+  }> => {
     if (!me || replyToMsgId === null) {
-      return { isReplyToMe: false, replyToUserId: null };
+      return {
+        isReplyToMe: false,
+        replyToUserId: null,
+        replyToUsername: null,
+        replyToPreviewText: null,
+      };
     }
 
     const meUserId = me.id.toString();
     const rememberedUserId = getRememberedMessageAuthor(chatId, replyToMsgId);
+    const rememberedPreview = getRememberedMessagePreview(chatId, replyToMsgId);
     if (rememberedUserId) {
       return {
         isReplyToMe: rememberedUserId === meUserId,
         replyToUserId: rememberedUserId,
+        replyToUsername: rememberedPreview?.username ?? rememberedUserId,
+        replyToPreviewText: rememberedPreview?.previewText ?? null,
       };
     }
 
     if (hasSentMessage(chatId, replyToMsgId)) {
       rememberMessageAuthor(chatId, replyToMsgId, meUserId);
-      return { isReplyToMe: true, replyToUserId: meUserId };
+      const meName = buildDisplayNameFromUser(me);
+      rememberMessagePreview(chatId, replyToMsgId, meName, null);
+      return {
+        isReplyToMe: true,
+        replyToUserId: meUserId,
+        replyToUsername: meName ?? meUserId,
+        replyToPreviewText: null,
+      };
     }
 
     try {
@@ -353,12 +411,28 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         const repliedFromId = repliedMessage.fromId;
         if (repliedFromId instanceof Api.PeerUser) {
           const replyToUserId = repliedFromId.userId.toString();
+          let replyToUsername: string | null = replyToUserId;
+          try {
+            const entity = await client.getEntity(repliedFromId);
+            if (entity instanceof Api.User) {
+              replyToUsername = buildDisplayNameFromEntity(entity) ?? replyToUserId;
+            }
+          } catch {
+            // Keep userId fallback.
+          }
+          const replyToPreviewText = extractReplyPreviewFromApiMessage(repliedMessage);
           rememberMessageAuthor(chatId, replyToMsgId, replyToUserId);
+          rememberMessagePreview(chatId, replyToMsgId, replyToUsername, replyToPreviewText);
           const isReplyToMe = replyToUserId === meUserId;
           if (isReplyToMe) {
             rememberSentMessage(chatId, replyToMsgId);
           }
-          return { isReplyToMe, replyToUserId };
+          return {
+            isReplyToMe,
+            replyToUserId,
+            replyToUsername,
+            replyToPreviewText,
+          };
         }
       }
     } catch (error) {
@@ -368,7 +442,12 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       );
     }
 
-    return { isReplyToMe: false, replyToUserId: null };
+    return {
+      isReplyToMe: false,
+      replyToUserId: null,
+      replyToUsername: null,
+      replyToPreviewText: null,
+    };
   };
   const toTelegramMessage = async (msg: Api.Message, photoCountOverride?: number, photoPaths?: string[]): Promise<TelegramMessage | null> => {
     if (!me || !msg.peerId) return null;
@@ -455,6 +534,7 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
       customEmojiInfoById
     );
     const mentionExtraction = extractMentionsFromMessageEntities(rawContext, msg.entities);
+    rememberMessagePreview(chatId, msg.id, senderName, renderedContext + photoPlaceholder);
 
     console.log(`[userbot] Ingested: from=${userId} (${senderName}) chat=${chatId} text="${text.slice(0, 20)}..." photo=${photoCount} mention=${isMentionMe} reply=${isReplyToMe} replyTo=${replyToMsgId === null ? "-" : replyToMsgId}`);
 
@@ -469,6 +549,8 @@ export function createUserBotAdapter(options: UserBotAdapterOptions): TelegramAd
         usernameHandle: senderUsernameHandle,
         replyToMessageId: replyToMsgId,
         replyToUserId: replyTarget.replyToUserId,
+        replyToUsername: replyTarget.replyToUsername,
+        replyToPreviewText: replyTarget.replyToPreviewText,
         isReplyToMe,
         isMentionMe,
         mentions: mentionExtraction.mentions,
@@ -737,6 +819,31 @@ function parseDocumentId(documentId: string): string | null {
     return null;
   }
   return normalized;
+}
+
+function normalizeReplyPreviewText(value: string | null | undefined): string | null {
+  const normalized = (value ?? "").trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= 180) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 177)}...`;
+}
+
+function extractReplyPreviewFromApiMessage(message: Api.Message): string | null {
+  const raw = normalizeReplyPreviewText(message.message);
+  if (raw) {
+    return raw;
+  }
+  if (message.media instanceof Api.MessageMediaPhoto) {
+    return "[photo]";
+  }
+  if (message.media instanceof Api.MessageMediaDocument) {
+    return "[file]";
+  }
+  return null;
 }
 
 function buildStickerSetCacheKey(stickerSet: Api.TypeInputStickerSet): string | null {

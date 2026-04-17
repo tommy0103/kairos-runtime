@@ -960,6 +960,8 @@ function toTelegramMessage(stored: SearchResult["messages"][number]): TelegramMe
     | (typeof metadata & {
         mentionUserIds?: string[];
         usernameHandle?: string;
+        replyToUsername?: string;
+        replyToPreviewText?: string;
       })
     | undefined;
   const replyToMessageIdRaw = metadata?.replyToMessageId ?? "";
@@ -977,6 +979,8 @@ function toTelegramMessage(stored: SearchResult["messages"][number]): TelegramMe
       username: metadata?.username ? metadata.username : null,
       replyToMessageId,
       replyToUserId: metadata?.replyToUserId ? metadata.replyToUserId : null,
+      replyToUsername: metadataExt?.replyToUsername ? metadataExt.replyToUsername : null,
+      replyToPreviewText: metadataExt?.replyToPreviewText ? metadataExt.replyToPreviewText : null,
       isReplyToMe: metadata?.isReplyToMe ?? false,
       isMentionMe: metadata?.isMentionMe ?? false,
       mentions: metadata?.mentions ?? [],

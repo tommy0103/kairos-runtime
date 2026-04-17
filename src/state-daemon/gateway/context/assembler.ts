@@ -68,8 +68,13 @@ function buildReplyPreviewNode(
     return `<reply_to_preview speaker="${escapeXml(getSpeaker(replyToMessage))}">${escapeXml(replyToMessage.context)}</reply_to_preview>`;
   }
   if (message.metadata.replyToMessageId) {
-    const fallbackSpeaker = (message.metadata.replyToUserId ?? "").trim() || "unknown";
-    const fallbackText = `unavailable (reply_to=${message.metadata.replyToMessageId})`;
+    const fallbackSpeaker =
+      (message.metadata.replyToUsername ?? "").trim() ||
+      (message.metadata.replyToUserId ?? "").trim() ||
+      "unknown";
+    const fallbackText =
+      (message.metadata.replyToPreviewText ?? "").trim() ||
+      `unavailable (reply_to=${message.metadata.replyToMessageId})`;
     return `<reply_to_preview speaker="${escapeXml(fallbackSpeaker)}">${escapeXml(fallbackText)}</reply_to_preview>`;
   }
   return "";

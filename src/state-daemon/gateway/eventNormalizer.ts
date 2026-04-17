@@ -264,6 +264,8 @@ function buildMergedMessage(messages: TelegramMessage[]): TelegramMessage {
       ...last.metadata,
       replyToMessageId: replySignal?.metadata.replyToMessageId ?? null,
       replyToUserId: replySignal?.metadata.replyToUserId ?? null,
+      replyToUsername: replySignal?.metadata.replyToUsername ?? null,
+      replyToPreviewText: replySignal?.metadata.replyToPreviewText ?? null,
       isReplyToMe: messages.some((item) => item.metadata.isReplyToMe),
       isMentionMe: messages.some((item) => item.metadata.isMentionMe),
       mentions: mergedMentions,
